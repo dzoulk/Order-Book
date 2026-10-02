@@ -10,7 +10,7 @@ get filled in as the milestone they belong to is completed.
 - [x] 3. Fuzz harness + sanitizers green
 - [x] 4. Benchmark harness + v1 results
 - [x] 5. Profile, v2 optimizations, v1 vs v2 results
-- [ ] 6. README polish
+- [x] 6. README polish
 
 ## Decisions made so far
 
