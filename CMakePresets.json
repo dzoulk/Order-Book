@@ -21,6 +21,16 @@
       }
     },
     {
+      "name": "profile",
+      "displayName": "Profile (Release + debug symbols + frame pointers, for perf)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/profile",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_FLAGS": "-g -fno-omit-frame-pointer"
+      }
+    },
+    {
       "name": "sanitize",
       "displayName": "Sanitizer (ASan + UBSan, Linux/GCC or Clang only)",
       "generator": "Ninja",
@@ -40,6 +50,7 @@
   "buildPresets": [
     { "name": "debug", "configurePreset": "debug" },
     { "name": "release", "configurePreset": "release" },
+    { "name": "profile", "configurePreset": "profile" },
     { "name": "sanitize", "configurePreset": "sanitize" }
   ],
   "testPresets": [

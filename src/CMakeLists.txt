@@ -1,6 +1,7 @@
 add_library(orderbook_core
     order_book.cpp
     reference_book.cpp
+    fast_order_book.cpp
 )
 
 target_include_directories(orderbook_core PUBLIC

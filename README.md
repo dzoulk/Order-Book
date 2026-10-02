@@ -29,7 +29,7 @@ Other presets: `release`, `sanitize` (ASan + UBSan, Linux/GCC or Clang only).
 
 ## Layout
 
-- `include/orderbook/`: public headers (`types.hpp`, `order_book.hpp`, `reference_book.hpp`)
+- `include/orderbook/`: public headers (`types.hpp`, `order_book.hpp`, `fast_order_book.hpp`, `reference_book.hpp`)
 - `src/`: implementation
 - `tests/`: GoogleTest unit tests, plus a differential fuzz test
 - `bench/`: throughput/latency harness, generates its own synthetic order
@@ -39,15 +39,25 @@ Other presets: `release`, `sanitize` (ASan + UBSan, Linux/GCC or Clang only).
 
 ## Benchmarks
 
-v1: ~9.4-10.1M ops/sec, p50 ~70-75ns, p99 ~225-240ns, p99.9 ~350-390ns, on
-an i7-13620H under WSL2. Full methodology and caveats in
-[bench/RESULTS.md](bench/RESULTS.md).
+| | Throughput | p50 | p99 | p99.9 |
+|---|---|---|---|---|
+| v1 (`std::map`/`std::list`) | ~10.05M ops/sec | ~72.5ns | ~232.5ns | ~353.5ns |
+| v2 (flat array, intrusive list, object pool) | ~11.34M ops/sec | ~55.3ns | ~213.5ns | ~327.5ns |
+
+Measured on an i7-13620H under WSL2. v2 is a real but modest win (~13%
+throughput, ~24% p50), consistent with what profiling v1 found: node
+allocation was the biggest cost, v2 removes most of it, but a remaining
+`unordered_map` in both engines' order index wasn't touched in this pass.
+Full methodology, per-run numbers, and the profiling-to-optimization
+story are in [bench/RESULTS.md](bench/RESULTS.md) and
+[docs/DESIGN.md](docs/DESIGN.md).
 
 ## Status
 
-Milestones 1 through 4 are done: the project is scaffolded, `OrderBook` has
-a working v1 implementation with price-time priority matching, a
-differential fuzz test checks it against a naive reference book after
-every operation (verified at 5,000,000 ops with zero mismatches), and it's
-benchmarked (above). See [docs/DESIGN.md](docs/DESIGN.md) for the full plan
-and what's next: profiling v1 and optimizing it into v2.
+Milestones 1 through 5 are done: the project is scaffolded, `OrderBook`
+(v1) and `FastOrderBook` (v2) both implement price-time priority matching
+with the same public interface, a differential fuzz test checks both
+against a naive reference book after every operation, and both are
+benchmarked (above) with the improvement traced back to what profiling
+v1 actually found. See [docs/DESIGN.md](docs/DESIGN.md) for the full
+story and what's left (milestone 6: README polish).

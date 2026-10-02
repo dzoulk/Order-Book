@@ -43,7 +43,49 @@ v1-vs-v2 comparison:**
   `docs/DESIGN.md`), so milestone 5 profiling will use `perf`'s
   `task-clock`-based sampling instead of cycle-accurate profiling.
 
-## v2
+## v2 (milestone 5)
 
-TODO, milestone 5, after profiling v1 with `perf` and applying the
-optimizations in `docs/DESIGN.md`.
+Same hardware/build/methodology as v1 above, same pre-generated op stream
+fed to both engines in the same `./build/release/bench/orderbook_bench`
+run (one binary now benchmarks both, see `bench/bench_main.cpp`).
+
+**Results (4 runs, different random seeds):**
+
+| Run | Engine | Throughput (ops/sec) | p50 (ns) | p99 (ns) | p99.9 (ns) |
+|-----|--------|----------------------|----------|----------|------------|
+| 1   | v1     | 9,971,417            | 73       | 239      | 369        |
+| 1   | v2     | 11,428,566           | 56       | 223      | 370        |
+| 2   | v1     | 10,040,046           | 72       | 229      | 345        |
+| 2   | v2     | 11,618,486           | 54       | 207      | 307        |
+| 3   | v1     | 9,998,169            | 73       | 234      | 358        |
+| 3   | v2     | 11,195,436           | 56       | 212      | 318        |
+| 4   | v1     | 10,196,262           | 72       | 228      | 342        |
+| 4   | v2     | 11,100,414           | 55       | 212      | 315        |
+
+Averages: v1 ~10.05M ops/sec, p50 72.5ns, p99 232.5ns, p99.9 353.5ns.
+v2 ~11.34M ops/sec, p50 55.3ns, p99 213.5ns, p99.9 327.5ns (327.5 includes
+run 1's 370 as an outlier; the other three average 313.3).
+
+**v2 is about 13% higher throughput, 24% lower p50, 8% lower p99, and
+roughly 10% lower p99.9** (excluding the one outlier run). Real, but more
+modest than the profiling might suggest at first glance, worth explaining
+rather than just reporting:
+
+Milestone 5's profiling found three engine-side cost centers: `malloc`/
+`cfree` and allocator internals (~17% of engine time), `std::map`
+red-black tree operations (~3.85%), and `index_`'s `unordered_map`
+operations (~13.5%). `FastOrderBook`'s flat array + intrusive list +
+object pool directly targets the first two (~21% combined), by design it
+does **not** touch `index_`, which stays an `unordered_map` in v2 (see
+docs/DESIGN.md for why). So the ~13-24% measured improvement lines up
+with removing roughly that ~21% slice of engine time while the ~13.5%
+`index_` cost rides along unchanged, not a shortfall against the
+profiling data, confirmation of it. The biggest remaining opportunity for
+a v3 would be `index_` itself.
+
+**Same caveats as v1 apply** (WSL2-not-bare-metal, per-op clock-call
+overhead baked into every sample). One more for v2 specifically:
+`FastOrderBook` only supports prices in `[0, kMaxPrice)` (1,000,000); the
+benchmark's price band (~10,000 ± a small drift) is nowhere near that
+limit, so it isn't a factor here, but it's a real behavioral difference
+from v1, not just an implementation detail.

@@ -1,9 +1,10 @@
-// Milestone 2: the same behavioral test suite runs against both the naive
-// reference book and the real OrderBook via a GoogleTest typed test suite,
-// so the two stay in parity by construction rather than by duplicated
-// test files. The milestone 3 fuzz test extends this same parity check to
-// millions of random operations.
+// Milestone 2: the same behavioral test suite runs against the naive
+// reference book, the real v1 OrderBook, and the v2 FastOrderBook via a
+// GoogleTest typed test suite, so all three stay in parity by construction
+// rather than by duplicated test files. The milestone 3 fuzz test extends
+// this same parity check to millions of random operations.
 
+#include "orderbook/fast_order_book.hpp"
 #include "orderbook/order_book.hpp"
 #include "orderbook/reference_book.hpp"
 
@@ -18,7 +19,7 @@ protected:
     Book book;
 };
 
-using BookTypes = ::testing::Types<NaiveOrderBook, OrderBook>;
+using BookTypes = ::testing::Types<NaiveOrderBook, OrderBook, FastOrderBook>;
 TYPED_TEST_SUITE(OrderBookTest, BookTypes);
 
 TYPED_TEST(OrderBookTest, RestsWhenNoCounterparty) {

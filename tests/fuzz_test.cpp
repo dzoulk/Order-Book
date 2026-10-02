@@ -1,14 +1,16 @@
 // Differential fuzz test: feeds the same random stream of operations to
-// NaiveOrderBook (obviously correct, linear scans) and OrderBook (the real
-// v1 engine) and checks they agree after every single operation, both on
-// the trades returned and on full book state. Prices are generated inside
-// a fixed band around a midpoint, so a linear sweep of that band after
-// every op is a complete check of book equality, not just bestBid/bestAsk.
+// NaiveOrderBook (obviously correct, linear scans), OrderBook (v1), and
+// FastOrderBook (v2), and checks the latter two agree with the naive book
+// after every single operation, both on the trades returned and on full
+// book state. Prices are generated inside a fixed band around a midpoint,
+// so a linear sweep of that band after every op is a complete check of
+// book equality, not just bestBid/bestAsk.
 // It's not a cheap check though: NaiveOrderBook's depthAt is O(n), called
-// twice per price in the band, every single op. That cost is the price of
-// checking full state after every op instead of just at the end, which is
-// what makes a failure point straight at the operation that broke things
-// instead of somewhere earlier in a long run.
+// twice per price in the band, every single op, for each of the two
+// comparisons. That cost is the price of checking full state after every
+// op instead of just at the end, which is what makes a failure point
+// straight at the operation that broke things instead of somewhere
+// earlier in a long run.
 //
 // Standalone executable rather than a GoogleTest case since it's one long
 // property check, not a suite of named cases. CTest just runs it and
@@ -21,6 +23,7 @@
 //                        higher, e.g. into the millions, for a serious
 //                        pre-milestone check)
 
+#include "orderbook/fast_order_book.hpp"
 #include "orderbook/order_book.hpp"
 #include "orderbook/reference_book.hpp"
 
@@ -52,19 +55,21 @@ std::size_t opCountFromEnvOrDefault() {
     return 20'000;
 }
 
-bool statesMatch(const NaiveOrderBook& naive, const OrderBook& real) {
-    if (naive.bestBid() != real.bestBid()) {
-        std::fprintf(stderr, "bestBid mismatch\n");
+template <typename Book>
+bool statesMatch(const NaiveOrderBook& naive, const Book& other, const char* label) {
+    if (naive.bestBid() != other.bestBid()) {
+        std::fprintf(stderr, "bestBid mismatch (naive vs %s)\n", label);
         return false;
     }
-    if (naive.bestAsk() != real.bestAsk()) {
-        std::fprintf(stderr, "bestAsk mismatch\n");
+    if (naive.bestAsk() != other.bestAsk()) {
+        std::fprintf(stderr, "bestAsk mismatch (naive vs %s)\n", label);
         return false;
     }
     for (Price px = kMidPrice - kBand; px <= kMidPrice + kBand; ++px) {
         for (Side side : {Side::Buy, Side::Sell}) {
-            if (naive.depthAt(side, px) != real.depthAt(side, px)) {
-                std::fprintf(stderr, "depthAt mismatch at price %lld\n", static_cast<long long>(px));
+            if (naive.depthAt(side, px) != other.depthAt(side, px)) {
+                std::fprintf(stderr, "depthAt mismatch at price %lld (naive vs %s)\n",
+                             static_cast<long long>(px), label);
                 return false;
             }
         }
@@ -72,15 +77,16 @@ bool statesMatch(const NaiveOrderBook& naive, const OrderBook& real) {
     return true;
 }
 
-bool tradesMatch(const std::vector<Trade>& a, const std::vector<Trade>& b) {
+bool tradesMatch(const std::vector<Trade>& a, const std::vector<Trade>& b, const char* label) {
     if (a.size() != b.size()) {
-        std::fprintf(stderr, "trade count mismatch: naive=%zu real=%zu\n", a.size(), b.size());
+        std::fprintf(stderr, "trade count mismatch (naive vs %s): naive=%zu other=%zu\n", label, a.size(),
+                     b.size());
         return false;
     }
     for (std::size_t i = 0; i < a.size(); ++i) {
         if (a[i].buyOrderId != b[i].buyOrderId || a[i].sellOrderId != b[i].sellOrderId ||
             a[i].price != b[i].price || a[i].qty != b[i].qty || a[i].seq != b[i].seq) {
-            std::fprintf(stderr, "trade %zu mismatch\n", i);
+            std::fprintf(stderr, "trade %zu mismatch (naive vs %s)\n", i, label);
             return false;
         }
     }
@@ -105,6 +111,7 @@ int main() {
 
     NaiveOrderBook naive;
     OrderBook real;
+    FastOrderBook fast;
 
     OrderId nextId = 1;
     std::vector<OrderId> everAdded;  // cancel targets; only addLimit orders can be resting
@@ -119,9 +126,10 @@ int main() {
             Qty qty = qtyPicker(rng);
             std::vector<Trade> naiveTrades = naive.addLimit(id, side, px, qty);
             std::vector<Trade> realTrades = real.addLimit(id, side, px, qty);
+            std::vector<Trade> fastTrades = fast.addLimit(id, side, px, qty);
             everAdded.push_back(id);
 
-            if (!tradesMatch(naiveTrades, realTrades)) {
+            if (!tradesMatch(naiveTrades, realTrades, "v1") || !tradesMatch(naiveTrades, fastTrades, "v2")) {
                 std::fprintf(stderr, "mismatch at op %zu (seed=%llu)\n", i,
                              static_cast<unsigned long long>(seed));
                 return 1;
@@ -137,9 +145,11 @@ int main() {
 
             bool naiveResult = naive.cancel(target);
             bool realResult = real.cancel(target);
-            if (naiveResult != realResult) {
-                std::fprintf(stderr, "cancel result mismatch at op %zu (seed=%llu): naive=%d real=%d\n",
-                             i, static_cast<unsigned long long>(seed), naiveResult, realResult);
+            bool fastResult = fast.cancel(target);
+            if (naiveResult != realResult || naiveResult != fastResult) {
+                std::fprintf(stderr,
+                             "cancel result mismatch at op %zu (seed=%llu): naive=%d v1=%d v2=%d\n", i,
+                             static_cast<unsigned long long>(seed), naiveResult, realResult, fastResult);
                 return 1;
             }
         } else {
@@ -147,15 +157,16 @@ int main() {
             Qty qty = qtyPicker(rng);
             std::vector<Trade> naiveTrades = naive.addMarket(id, side, qty);
             std::vector<Trade> realTrades = real.addMarket(id, side, qty);
+            std::vector<Trade> fastTrades = fast.addMarket(id, side, qty);
 
-            if (!tradesMatch(naiveTrades, realTrades)) {
+            if (!tradesMatch(naiveTrades, realTrades, "v1") || !tradesMatch(naiveTrades, fastTrades, "v2")) {
                 std::fprintf(stderr, "mismatch at op %zu (seed=%llu)\n", i,
                              static_cast<unsigned long long>(seed));
                 return 1;
             }
         }
 
-        if (!statesMatch(naive, real)) {
+        if (!statesMatch(naive, real, "v1") || !statesMatch(naive, fast, "v2")) {
             std::fprintf(stderr, "mismatch at op %zu (seed=%llu)\n", i,
                          static_cast<unsigned long long>(seed));
             return 1;

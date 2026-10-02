@@ -1,2 +1,5 @@
 add_executable(orderbook_bench bench_main.cpp)
 target_link_libraries(orderbook_bench PRIVATE orderbook_core)
+
+add_executable(orderbook_profile profile_main.cpp)
+target_link_libraries(orderbook_profile PRIVATE orderbook_core)
