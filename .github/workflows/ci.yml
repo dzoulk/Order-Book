@@ -22,6 +22,8 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test
         run: ctest --preset ${{ matrix.preset }} --output-on-failure
+        env:
+          ORDERBOOK_FUZZ_OPS: "20000"
 
   windows:
     runs-on: windows-latest
@@ -36,3 +38,5 @@ jobs:
         run: cmake --build --preset release
       - name: Test
         run: ctest --preset release --output-on-failure
+        env:
+          ORDERBOOK_FUZZ_OPS: "20000"

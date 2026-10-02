@@ -18,3 +18,9 @@ target_link_libraries(orderbook_tests PRIVATE
 
 include(GoogleTest)
 gtest_discover_tests(orderbook_tests)
+
+add_executable(orderbook_fuzz fuzz_test.cpp)
+target_link_libraries(orderbook_fuzz PRIVATE orderbook_core)
+
+add_test(NAME orderbook_fuzz COMMAND orderbook_fuzz)
+set_tests_properties(orderbook_fuzz PROPERTIES TIMEOUT 300)

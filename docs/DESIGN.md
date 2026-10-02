@@ -7,7 +7,7 @@ get filled in as the milestone they belong to is completed.
 
 - [x] 1. Scaffolding, CMake, CI, empty `OrderBook` interface, reference book
 - [x] 2. v1 engine + unit tests passing
-- [ ] 3. Fuzz harness + sanitizers green
+- [x] 3. Fuzz harness + sanitizers green
 - [ ] 4. Benchmark harness + v1 results
 - [ ] 5. Profile, v2 optimizations, v1 vs v2 results
 - [ ] 6. README polish
@@ -49,6 +49,30 @@ fails with "Unable to find PMU". Software events work fine though
 `perf record -e task-clock -g` for call-graph sampling). For milestone 5
 profiling, use `task-clock`-based sampling instead of cycle-based. That's
 enough to find which functions are hot, which is the actual goal.
+
+## Fuzz harness (milestone 3)
+
+`tests/fuzz_test.cpp` runs the same random stream of operations against
+`NaiveOrderBook` and `OrderBook` and checks they agree after every single
+op, both on returned trades and on full book state (bestBid, bestAsk, and
+depth at every price in the generated band). A mismatch prints the seed and
+the failing op index so it can be reproduced with
+`ORDERBOOK_FUZZ_SEED=<seed> ORDERBOOK_FUZZ_OPS=<n>`.
+
+Default op count is 20,000, which runs in about a second, so it doesn't
+slow down routine local test runs. CI pins it to the same value explicitly.
+Verified at 5,000,000 ops on the release build with zero mismatches.
+
+**Timing caveat found during that run:** the fuzz process reported about
+6.6 hours of CPU time but almost 27 hours of wall-clock elapsed time (24%
+average CPU), and the system clock rolled over a day during the run. The
+WSL2 VM was clearly asleep, suspended, or heavily throttled for most of
+that stretch rather than actually computing. The correctness result still
+holds since it's independent of timing, but this is a real problem for
+milestone 4: wall-clock `time` across a sleep/suspend is meaningless, and
+benchmark runs will need either a guaranteed-awake machine for the
+duration or a sanity check that CPU time and elapsed time actually match
+before trusting a number.
 
 ## v1 `OrderBook` design (milestone 2)
 

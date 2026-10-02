@@ -31,14 +31,16 @@ Other presets: `release`, `sanitize` (ASan + UBSan, Linux/GCC or Clang only).
 
 - `include/orderbook/`: public headers (`types.hpp`, `order_book.hpp`, `reference_book.hpp`)
 - `src/`: implementation
-- `tests/`: GoogleTest unit tests (plus a differential fuzz test, milestone 3)
+- `tests/`: GoogleTest unit tests, plus a differential fuzz test
 - `bench/`: throughput/latency harness (milestone 4)
 - `tools/`: synthetic order-flow generator / LOBSTER loader (milestone 4)
 - `docs/`: design notes
 
 ## Status
 
-Milestones 1 and 2 are done: the project is scaffolded and `OrderBook` has
-a working v1 implementation with price-time priority matching, backed by a
-GoogleTest suite that runs against both it and a naive reference book. See
-[docs/DESIGN.md](docs/DESIGN.md) for the full plan and what's next.
+Milestones 1 through 3 are done: the project is scaffolded, `OrderBook` has
+a working v1 implementation with price-time priority matching, and a
+differential fuzz test checks it against a naive reference book after
+every operation (verified at 5,000,000 ops on a release build with zero
+mismatches). See [docs/DESIGN.md](docs/DESIGN.md) for the full plan and
+what's next.
