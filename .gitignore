@@ -1,5 +1,6 @@
 build/
 out/
+bench/results/*.csv
 compile_commands.json
 CMakeUserPresets.json
 .cache/

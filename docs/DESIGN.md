@@ -8,7 +8,7 @@ get filled in as the milestone they belong to is completed.
 - [x] 1. Scaffolding, CMake, CI, empty `OrderBook` interface, reference book
 - [x] 2. v1 engine + unit tests passing
 - [x] 3. Fuzz harness + sanitizers green
-- [ ] 4. Benchmark harness + v1 results
+- [x] 4. Benchmark harness + v1 results
 - [ ] 5. Profile, v2 optimizations, v1 vs v2 results
 - [ ] 6. README polish
 
@@ -73,6 +73,24 @@ milestone 4: wall-clock `time` across a sleep/suspend is meaningless, and
 benchmark runs will need either a guaranteed-awake machine for the
 duration or a sanity check that CPU time and elapsed time actually match
 before trusting a number.
+
+## Benchmark harness (milestone 4)
+
+`bench/bench_main.cpp` only benchmarks the real `OrderBook`, never
+`NaiveOrderBook`: the naive book is O(n) by design and exists purely as a
+correctness oracle for the fuzz test, not a baseline worth measuring.
+
+The full operation stream (60% limit / 30% cancel / 10% market, prices in
+a drifting band around a midpoint) is pre-generated before timing starts,
+so RNG overhead never lands inside a measured latency sample, only the
+`OrderBook` call itself is timed. Full results, methodology, and caveats
+(WSL2-not-bare-metal, clock-call overhead inside each sample) are in
+`bench/RESULTS.md`. Headline numbers: ~9.4-10.1M ops/sec, p50 ~70-75ns,
+p99 ~225-240ns, p99.9 ~350-390ns, measured on an i7-13620H under WSL2.
+
+This run completed in well under a second end to end, so the WSL2
+sleep/suspend timing problem found during the milestone 3 fuzz run isn't a
+concern here, there's no realistic window for the host to sleep mid-run.
 
 ## v1 `OrderBook` design (milestone 2)
 

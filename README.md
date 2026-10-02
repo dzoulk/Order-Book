@@ -32,15 +32,22 @@ Other presets: `release`, `sanitize` (ASan + UBSan, Linux/GCC or Clang only).
 - `include/orderbook/`: public headers (`types.hpp`, `order_book.hpp`, `reference_book.hpp`)
 - `src/`: implementation
 - `tests/`: GoogleTest unit tests, plus a differential fuzz test
-- `bench/`: throughput/latency harness (milestone 4)
-- `tools/`: synthetic order-flow generator / LOBSTER loader (milestone 4)
+- `bench/`: throughput/latency harness, generates its own synthetic order
+  flow internally (see `bench/RESULTS.md` for numbers)
+- `tools/`: optional LOBSTER sample-data loader, not yet built
 - `docs/`: design notes
+
+## Benchmarks
+
+v1: ~9.4-10.1M ops/sec, p50 ~70-75ns, p99 ~225-240ns, p99.9 ~350-390ns, on
+an i7-13620H under WSL2. Full methodology and caveats in
+[bench/RESULTS.md](bench/RESULTS.md).
 
 ## Status
 
-Milestones 1 through 3 are done: the project is scaffolded, `OrderBook` has
-a working v1 implementation with price-time priority matching, and a
+Milestones 1 through 4 are done: the project is scaffolded, `OrderBook` has
+a working v1 implementation with price-time priority matching, a
 differential fuzz test checks it against a naive reference book after
-every operation (verified at 5,000,000 ops on a release build with zero
-mismatches). See [docs/DESIGN.md](docs/DESIGN.md) for the full plan and
-what's next.
+every operation (verified at 5,000,000 ops with zero mismatches), and it's
+benchmarked (above). See [docs/DESIGN.md](docs/DESIGN.md) for the full plan
+and what's next: profiling v1 and optimizing it into v2.
