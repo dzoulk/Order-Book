@@ -9,6 +9,7 @@ FetchContent_MakeAvailable(googletest)
 
 add_executable(orderbook_tests
     book_test.cpp
+    occupancy_bitmap_test.cpp
 )
 
 target_link_libraries(orderbook_tests PRIVATE
@@ -24,3 +25,9 @@ target_link_libraries(orderbook_fuzz PRIVATE orderbook_core)
 
 add_test(NAME orderbook_fuzz COMMAND orderbook_fuzz)
 set_tests_properties(orderbook_fuzz PROPERTIES TIMEOUT 300)
+
+add_executable(orderbook_sparse_fuzz sparse_fuzz_test.cpp)
+target_link_libraries(orderbook_sparse_fuzz PRIVATE orderbook_core)
+
+add_test(NAME orderbook_sparse_fuzz COMMAND orderbook_sparse_fuzz)
+set_tests_properties(orderbook_sparse_fuzz PROPERTIES TIMEOUT 60)

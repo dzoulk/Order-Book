@@ -216,16 +216,10 @@ differential fuzz test), different internals:
   the hot path once the pool has grown to cover the live order count.
 - **`bestBid`/`bestAsk` are O(1) cached reads, not array scans.** Updated
   directly on insert when a new order improves the cached best. When the
-  cached best level empties out, a scan finds the next occupied level,
-  bounded by a live resting-order count check so it never scans a
-  genuinely empty book looking for something that isn't there. Worst case
-  this scan is O(band width) if occupied levels are far apart, versus
-  `std::map`'s guaranteed O(log n); acceptable here given how tightly
-  clustered real order flow is, and acceptable for this project's scope.
-  A guaranteed worst-case bound would need something like a bitset with a
-  hierarchical "next set bit" structure, deliberately not built, it's
-  real added complexity for a bound that doesn't matter for this
-  workload.
+  cached best level empties out, `bidOccupied_`/`askOccupied_` (an
+  `OccupancyBitmap`, see the follow-up below) find the next occupied
+  level in genuine O(1), a small fixed number of word operations
+  independent of how far away that level is.
 
 **Known limitation, deliberate:** `FastOrderBook` only supports prices in
 `[0, kMaxPrice)` (currently 1,000,000) and throws `std::out_of_range`
@@ -245,3 +239,68 @@ legitimate further optimization but is out of scope for this pass, it's
 not in the original flat-array/intrusive-list/object-pool plan, and
 doing it well deserves its own measurement pass rather than being bundled
 in here. Noted as a candidate for a future v3, not pretended away.
+
+### Follow-up: v2 was O(price range) on a sparse book, not O(1)
+
+An external review of this project caught a real bug in the original
+v2 design above: the "bounded by a live-count check so it never scans a
+genuinely empty book" claim was true, but didn't mean what it needed to
+mean. When the cached best price empties out and there *is* another
+occupied level, the old `findNextOccupied` found it with a **linear scan
+over the price array**, one array slot at a time, from the old best
+toward the new one. That's O(gap between occupied prices), not O(1), and
+the original "acceptable given how tightly clustered real order flow is"
+justification was an assumption that was never actually tested.
+
+**Reproduction:** one resting bid at price 10, then repeatedly add and
+cancel a bid at price 900,000 (`bench/sparse_bench_main.cpp`):
+
+| | ns per add+cancel |
+|---|---|
+| v1 (`std::map`) | ~46-50 |
+| v2, before this fix | ~388,000-432,000 (about 8,000-8,500x slower than v1) |
+
+Every add+cancel at the far price walked roughly 900,000 array slots
+looking for the resting order at price 10 (or back again), because that
+was the only other occupied level. The main benchmark and the main fuzz
+test never caught this: both only ever generate prices in a narrow band
+(~±20 ticks around a midpoint), so the next occupied level was always
+close by. A sparse book, exactly the kind of input an interviewer asks
+"what happens if..." about, broke the O(1) claim completely.
+
+**Fix:** `OccupancyBitmap` (`include/orderbook/occupancy_bitmap.hpp`,
+`src/occupancy_bitmap.cpp`), a hierarchical bitmap: one bit per price,
+plus a chain of summary levels where level L+1 has one bit per 64-bit
+word of level L, set iff that word is non-zero. For `kMaxPrice` =
+1,000,000 that's 4 levels (15625, 245, 4, 1 words). Finding the next or
+previous occupied price is then at most one O(1) word operation
+(`std::countr_zero`/`std::countl_zero`) per level, so at most 4 word
+operations total, regardless of how far away the next occupied price is.
+`FastOrderBook` maintains one `OccupancyBitmap` per side, setting a bit
+when a price level gains its first resting order and clearing it when a
+level empties out completely.
+
+**After the fix, same reproduction:** v2 measured ~41-46 ns per
+add+cancel, on par with or faster than v1, not 8,000x slower.
+
+**Verification beyond the one repro case:**
+- `tests/occupancy_bitmap_test.cpp`: unit tests for the bitmap itself,
+  including cases that specifically cross level-1, level-2, and
+  level-3 summary boundaries, the exact kind of boundary a subtly wrong
+  implementation would get wrong.
+- `tests/sparse_fuzz_test.cpp`: a second differential fuzz test (naive
+  vs v1 vs v2) using two price clusters ~999,000 ticks apart instead of
+  fuzz_test.cpp's single narrow band, so cross-cluster best-price
+  transitions get exercised on every run, not just in the one-off
+  benchmark repro. Passes at the default 5,000 ops; registered in CTest
+  so it runs on every `ctest` invocation, not just on demand.
+- `bench/sparse_bench_main.cpp` is now a permanent benchmark (not just a
+  one-off repro script), so this specific pathology regressing would show
+  up immediately.
+
+**Lesson, worth stating plainly:** a benchmark and a fuzz test only tell
+you about the inputs they generate. Both of this project's existing ones
+used the same narrow, clustered price distribution, which is realistic
+for *typical* order flow but hid a real worst-case bug. "What happens on
+a sparse book" is exactly the kind of question that distribution could
+never have surfaced on its own.

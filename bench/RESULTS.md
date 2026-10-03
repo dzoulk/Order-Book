@@ -89,3 +89,38 @@ overhead baked into every sample). One more for v2 specifically:
 benchmark's price band (~10,000 ± a small drift) is nowhere near that
 limit, so it isn't a factor here, but it's a real behavioral difference
 from v1, not just an implementation detail.
+
+**That price band also hid a real bug**, see the sparse-book section
+below.
+
+## Sparse book (milestone 5 follow-up)
+
+**Command:** `./build/release/bench/orderbook_sparse_bench`. One resting
+bid at price 10, then 2,000 iterations of add+cancel a bid at price
+900,000. Same hardware/build as above.
+
+**Before the fix** (linear-scan `findNextOccupied`):
+
+| Engine | ns per add+cancel |
+|---|---|
+| v1 | ~46-50 |
+| v2 | ~388,000-432,000 (about 8,000-8,500x slower than v1) |
+
+Every add or cancel at the far price had to walk the price array looking
+for the only other occupied level, roughly 900,000 slots away. Genuinely
+O(price range), not O(1), despite what the v1-vs-v2 table above's
+"amortized O(1)" claim said. The all-benchmarks-use-the-same-narrow-band
+problem: nothing in this file's methodology would ever generate a price
+900,000 ticks from the action, so nothing caught it.
+
+**After the fix** (`OccupancyBitmap`, a hierarchical bitmap, see
+`docs/DESIGN.md`):
+
+```
+sparse_bench [v1]: 48 ns per add+cancel (2000 iters)
+sparse_bench [v2]: 41 ns per add+cancel (2000 iters)
+```
+
+v2 is now on par with or faster than v1 on this exact scenario, not
+8,000x slower. This benchmark is permanent (`bench/sparse_bench_main.cpp`,
+not a one-off script) specifically so this can't silently regress again.

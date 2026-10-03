@@ -52,24 +52,22 @@ void FastOrderBook::unlink(Level& level, PoolIndex idx) {
     }
 }
 
-std::optional<Price> FastOrderBook::findNextOccupied(const std::vector<Level>& levels, Price from,
+std::optional<Price> FastOrderBook::findNextOccupied(const OccupancyBitmap& occupied, Price from,
                                                        bool searchUpward) const {
     if (searchUpward) {
-        for (Price p = from + 1; p < kMaxPrice; ++p) {
-            if (levels[static_cast<std::size_t>(p)].head != kInvalidIndex) return p;
-        }
-    } else {
-        for (Price p = from - 1; p >= 0; --p) {
-            if (levels[static_cast<std::size_t>(p)].head != kInvalidIndex) return p;
-        }
+        auto found = occupied.findFirstSetFrom(static_cast<std::size_t>(from + 1));
+        return found ? std::optional<Price>(static_cast<Price>(*found)) : std::nullopt;
     }
-    return std::nullopt;
+    if (from <= 0) return std::nullopt;
+    auto found = occupied.findLastSetUpTo(static_cast<std::size_t>(from - 1));
+    return found ? std::optional<Price>(static_cast<Price>(*found)) : std::nullopt;
 }
 
 std::vector<Trade> FastOrderBook::match(Order& incoming, bool isMarket) {
     std::vector<Trade> trades;
     bool isBuy = incoming.side == Side::Buy;
     std::vector<Level>& oppositeLevels = isBuy ? askLevels_ : bidLevels_;
+    OccupancyBitmap& oppositeOccupied = isBuy ? askOccupied_ : bidOccupied_;
     std::optional<Price>& oppositeBest = isBuy ? bestAskPrice_ : bestBidPrice_;
     std::size_t& oppositeCount = isBuy ? askCount_ : bidCount_;
 
@@ -110,8 +108,9 @@ std::vector<Trade> FastOrderBook::match(Order& incoming, bool isMarket) {
             --oppositeCount;
 
             if (level.head == kInvalidIndex) {
+                oppositeOccupied.clear(static_cast<std::size_t>(levelPrice));
                 oppositeBest = (oppositeCount == 0) ? std::nullopt
-                                                     : findNextOccupied(oppositeLevels, levelPrice, isBuy);
+                                                     : findNextOccupied(oppositeOccupied, levelPrice, isBuy);
             }
         }
     }
@@ -123,12 +122,14 @@ void FastOrderBook::rest(const Order& order) {
     if (order.side == Side::Buy) {
         PoolIndex idx = allocateNode(order);
         pushBack(bidLevels_[static_cast<std::size_t>(order.price)], idx);
+        bidOccupied_.set(static_cast<std::size_t>(order.price));
         index_[order.id] = idx;
         ++bidCount_;
         if (!bestBidPrice_.has_value() || order.price > *bestBidPrice_) bestBidPrice_ = order.price;
     } else {
         PoolIndex idx = allocateNode(order);
         pushBack(askLevels_[static_cast<std::size_t>(order.price)], idx);
+        askOccupied_.set(static_cast<std::size_t>(order.price));
         index_[order.id] = idx;
         ++askCount_;
         if (!bestAskPrice_.has_value() || order.price < *bestAskPrice_) bestAskPrice_ = order.price;
@@ -168,17 +169,25 @@ bool FastOrderBook::cancel(OrderId id) {
         Level& level = bidLevels_[static_cast<std::size_t>(order.price)];
         unlink(level, idx);
         --bidCount_;
-        if (level.head == kInvalidIndex && bestBidPrice_ == order.price) {
-            bestBidPrice_ = (bidCount_ == 0) ? std::nullopt
-                                              : findNextOccupied(bidLevels_, order.price, /*searchUpward=*/false);
+        if (level.head == kInvalidIndex) {
+            bidOccupied_.clear(static_cast<std::size_t>(order.price));
+            if (bestBidPrice_ == order.price) {
+                bestBidPrice_ = (bidCount_ == 0)
+                                    ? std::nullopt
+                                    : findNextOccupied(bidOccupied_, order.price, /*searchUpward=*/false);
+            }
         }
     } else {
         Level& level = askLevels_[static_cast<std::size_t>(order.price)];
         unlink(level, idx);
         --askCount_;
-        if (level.head == kInvalidIndex && bestAskPrice_ == order.price) {
-            bestAskPrice_ = (askCount_ == 0) ? std::nullopt
-                                              : findNextOccupied(askLevels_, order.price, /*searchUpward=*/true);
+        if (level.head == kInvalidIndex) {
+            askOccupied_.clear(static_cast<std::size_t>(order.price));
+            if (bestAskPrice_ == order.price) {
+                bestAskPrice_ = (askCount_ == 0)
+                                    ? std::nullopt
+                                    : findNextOccupied(askOccupied_, order.price, /*searchUpward=*/true);
+            }
         }
     }
 

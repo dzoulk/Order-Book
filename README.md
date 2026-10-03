@@ -33,9 +33,12 @@ implementation, and a measured (not guessed) v1 → v2 performance story.
   doubly-linked list backed by a preallocated object pool, so resting an
   order is a pool-slot grab and pointer updates, no heap allocation.
   Complexity: `addLimit`/`addMarket`/`cancel` O(1) amortized; `bestBid`/
-  `bestAsk` O(1) cached read, with a bounded scan only when the cached best
-  price level empties out. Trade-off: only supports prices in
-  `[0, kMaxPrice)` (see Known limitations).
+  `bestAsk` O(1), including finding the next occupied price level when the
+  cached best empties out, via a hierarchical bitmap (`OccupancyBitmap`).
+  **That O(1) claim used to be wrong:** an earlier version found the next
+  occupied level with a linear scan, genuinely O(price range) on a sparse
+  book, see Known limitations for the numbers and the fix. Trade-off:
+  only supports prices in `[0, kMaxPrice)` (see Known limitations).
 - Full rationale, the profiling data that drove v2's design, and every
   decision's "why" lives in [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -64,12 +67,13 @@ Linux/GCC or Clang only).
 
 `ctest --preset debug` (or `sanitize`) runs everything: the GoogleTest unit
 suite (same behavioral tests run against `NaiveOrderBook`, `OrderBook`, and
-`FastOrderBook` via typed tests) plus the differential fuzz test.
+`FastOrderBook` via typed tests, plus `OccupancyBitmap`'s own tests), the
+main differential fuzz test, and a second sparse-book fuzz test.
 
-The fuzz test (`tests/fuzz_test.cpp`) feeds the same random operation stream
-to all three books and checks they agree after every single operation, both
-on returned trades and on full book state. Configurable via environment
-variables:
+The main fuzz test (`tests/fuzz_test.cpp`) feeds the same random operation
+stream to all three books and checks they agree after every single
+operation, both on returned trades and on full book state. Configurable
+via environment variables:
 
 ```
 ORDERBOOK_FUZZ_SEED=<seed>   # reproduce a specific run (default: random)
@@ -81,6 +85,12 @@ It's been run up to 5,000,000 ops (v1 only) and 500,000 ops (v1 and v2
 together) with zero mismatches, see [docs/DESIGN.md](docs/DESIGN.md) for
 why it isn't run at that scale by default (the naive reference's cost
 scales roughly quadratically with op count, not linearly).
+
+`tests/sparse_fuzz_test.cpp` runs the same three-way comparison but with
+two price clusters ~999,000 ticks apart instead of one narrow band, the
+shape of book that exposed a real O(price range) bug in v2 (see Known
+limitations). `ORDERBOOK_SPARSE_FUZZ_SEED`/`ORDERBOOK_SPARSE_FUZZ_OPS`
+configure it the same way.
 
 ## Benchmarks
 
@@ -107,6 +117,13 @@ remaining `unordered_map` in both engines' order index wasn't touched in
 this pass. Full per-run numbers and the profiling-to-optimization story are
 in [bench/RESULTS.md](bench/RESULTS.md) and [docs/DESIGN.md](docs/DESIGN.md).
 
+That table uses the same narrow, clustered price distribution as the fuzz
+test, which turned out to hide a real bug: `./build/release/bench/orderbook_sparse_bench`
+benchmarks a deliberately sparse scenario (one resting order far from
+where the action is), where v2 used to be about 8,000x slower than v1
+before a fix. See Known limitations and [docs/DESIGN.md](docs/DESIGN.md)
+for the full story.
+
 ## Python bindings and RL environment (stretch goal)
 
 ```
@@ -127,6 +144,18 @@ full list of what's simplified and why.
 
 ## Known limitations
 
+- **Found and fixed: v2 was O(price range) on a sparse book, not O(1).**
+  An external review caught this. `bestBid`/`bestAsk` finding the next
+  occupied level used to be a linear array scan; a book with one resting
+  order far from the action made it ~8,000x slower than v1 (measured:
+  ~432,000ns per add+cancel vs v1's ~46ns). The main benchmark and fuzz
+  test both use a narrow, clustered price distribution and never
+  exercised this. Fixed with a hierarchical bitmap (`OccupancyBitmap`),
+  genuine O(1) regardless of how sparse the book is; now v2 measures
+  ~41-46ns on the exact same scenario, on par with v1. Permanent
+  regression coverage: `bench/sparse_bench_main.cpp` and
+  `tests/sparse_fuzz_test.cpp`. Full writeup in
+  [docs/DESIGN.md](docs/DESIGN.md).
 - **`FastOrderBook` only supports prices in `[0, kMaxPrice)`** (currently
   1,000,000) and throws `std::out_of_range` outside that band.
   `OrderBook` and `NaiveOrderBook` have no such restriction. A real
@@ -155,11 +184,12 @@ full list of what's simplified and why.
 
 ## Layout
 
-- `include/orderbook/`: public headers (`types.hpp`, `order_book.hpp`, `fast_order_book.hpp`, `reference_book.hpp`)
+- `include/orderbook/`: public headers (`types.hpp`, `order_book.hpp`, `fast_order_book.hpp`, `occupancy_bitmap.hpp`, `reference_book.hpp`)
 - `src/`: implementation
-- `tests/`: GoogleTest unit tests, plus a differential fuzz test
+- `tests/`: GoogleTest unit tests, plus two differential fuzz tests (narrow-band and sparse)
 - `bench/`: throughput/latency harness, generates its own synthetic order
-  flow internally (see `bench/RESULTS.md` for numbers)
+  flow internally (see `bench/RESULTS.md` for numbers), plus a dedicated
+  sparse-book regression benchmark
 - `tools/`: optional LOBSTER sample-data loader, not yet built
 - `docs/`: design notes
 - `python/`: pybind11 bindings (`bindings.cpp`) and a Gymnasium
