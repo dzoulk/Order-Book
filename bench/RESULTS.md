@@ -1,5 +1,68 @@
 # Benchmark results
 
+## Follow-up: throughput was still contaminated by clock-call overhead
+
+A review pointed out that reporting clock-call overhead and timing whole
+batches (rather than summing per-op samples) would make the numbers more
+honest. The throughput number already came from a single start/end
+wrapped around the whole measured loop, not a sum of per-op samples, but
+that loop's body still contained the per-op `Clock::now()` calls used for
+the latency samples, so the "whole batch" timer was itself measuring
+time spent in clock calls, not just engine work.
+
+**Fix:** throughput and latency are now measured in two separate passes,
+each against its own fresh book instance replaying the identical
+pre-generated op stream. The throughput pass has zero per-op
+instrumentation (`measureThroughput` in `bench/bench_main.cpp`); the
+latency pass keeps the per-op timestamps needed for percentiles. Clock
+overhead itself is measured once (calling `Clock::now()` back to back
+200,000 times) and printed with every run, so the known floor under the
+latency numbers is stated, not hidden.
+
+**The effect was large, not cosmetic:**
+
+| | Old (contaminated) | New (clean) | Change |
+|---|---|---|---|
+| v1 throughput | ~10.05M ops/sec | ~16.69M ops/sec | +66% |
+| v2 throughput | ~11.34M ops/sec | ~20.44M ops/sec | +75% |
+
+Clock-call overhead measured at ~16-24 ns per call, ~33-47 ns per
+latency sample (two calls bracketing each op). At v2's ~58 ns p50, over
+half of that was clock overhead, not engine work. The old numbers in the
+sections below are left as they were originally measured and reported,
+the point of this file is an honest record, not a cleaned-up one, but
+they should not be trusted as absolute throughput figures. The new
+methodology's numbers are in "v1/v2 (corrected)" below.
+
+## v1/v2 (corrected)
+
+Same hardware (Intel Core i7-13620H, WSL2), same build
+(`cmake --preset release`, GCC 15.2.0, `-O3 -DNDEBUG`), same op mix and
+pre-generated stream as below, new two-pass methodology.
+
+**Results (4 runs, different random seeds):**
+
+| Run | Engine | Throughput (ops/sec) | p50 (ns) | p99 (ns) | p99.9 (ns) | Clock overhead (ns/call) |
+|-----|--------|----------------------|----------|----------|------------|---------------------------|
+| 1   | v1     | 15,715,028           | 74       | 219      | 355        | 23.6                      |
+| 1   | v2     | 19,812,084           | 59       | 207      | 344        | 23.6                      |
+| 2   | v1     | 16,953,246           | 72       | 212      | 331        | 18.8                      |
+| 2   | v2     | 20,886,014           | 58       | 202      | 312        | 18.8                      |
+| 3   | v1     | 17,057,209           | 70       | 202      | 310        | 16.4                      |
+| 3   | v2     | 20,885,553           | 57       | 198      | 311        | 16.4                      |
+| 4   | v1     | 17,028,464           | 70       | 209      | 339        | 16.6                      |
+| 4   | v2     | 20,174,433           | 57       | 197      | 305        | 16.6                      |
+
+Averages: v1 ~16.69M ops/sec, p50 71.5ns, p99 210.5ns, p99.9 333.8ns.
+v2 ~20.44M ops/sec, p50 57.75ns, p99 201ns, p99.9 318ns.
+
+**v2 is about 22% higher throughput and 19% lower p50** than v1 under
+this corrected methodology, both numbers changed from the original
+~13%/~24% because removing a roughly-constant contamination source from
+both measurements doesn't preserve their ratio. This is itself worth
+knowing: a flawed measurement methodology doesn't just inflate absolute
+numbers, it can distort the comparison the whole exercise exists to make.
+
 ## Follow-up: match() no longer allocates a vector per call
 
 A review caught `match()` returning `std::vector<Trade>` by value, a
@@ -18,7 +81,13 @@ time, total allocator overhead is about 5% of engine time, with
 dominant remaining cost, more than double the allocator. Full numbers in
 `docs/DESIGN.md`.
 
-## v1 (milestone 4)
+## v1 (milestone 4, original measurement, since corrected above)
+
+**Superseded by "v1/v2 (corrected)" above**, kept for an honest record of
+what was actually measured and reported at the time, not retroactively
+cleaned up. Do not use these throughput numbers; the methodology that
+produced them was contaminated by clock-call overhead (see the
+methodology-fix section above).
 
 **Hardware:** Intel Core i7-13620H (8 cores / 16 threads), 7.6 GiB RAM
 visible to the VM, running inside WSL2 (Ubuntu 26.04, kernel
@@ -61,7 +130,9 @@ v1-vs-v2 comparison:**
   `docs/DESIGN.md`), so milestone 5 profiling will use `perf`'s
   `task-clock`-based sampling instead of cycle-accurate profiling.
 
-## v2 (milestone 5)
+## v2 (milestone 5, original measurement, since corrected above)
+
+**Also superseded by "v1/v2 (corrected)" above**, same reason.
 
 Same hardware/build/methodology as v1 above, same pre-generated op stream
 fed to both engines in the same `./build/release/bench/orderbook_bench`

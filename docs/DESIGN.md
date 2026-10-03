@@ -271,6 +271,36 @@ direct, v2-specific confirmation (rather than inference from v1's
 numbers) that `index_` is the single biggest remaining optimization
 target for a v3.
 
+### Follow-up: throughput measurement was still contaminated
+
+A third review finding: "measure the clock overhead itself and report
+it, and compute throughput by timing whole batches rather than summing
+per-op samples." Throughput already came from a single start/end wrapped
+around the whole measured loop, not a sum of per-op latency samples, but
+that loop's body still contained the per-op `Clock::now()` calls used to
+build the latency distribution, so the "whole batch" timer was itself
+measuring time spent in clock calls, not purely engine work.
+
+**Fix:** throughput and latency are now measured in two separate passes
+against two fresh instances of the same book, replaying the identical
+pre-generated op stream. The throughput pass has zero per-op
+instrumentation; the latency pass keeps the per-op timestamps, and its
+own wall-clock time is never used for a throughput number. Clock-call
+overhead is measured once per run (calling `Clock::now()` back to back
+200,000 times) and printed alongside the results.
+
+**The effect was large:** v1 throughput went from ~10.05M to ~16.69M
+ops/sec (+66%), v2 from ~11.34M to ~20.44M ops/sec (+75%), once the
+per-op clock calls were out of the timed region. Clock overhead measured
+at ~16-24ns per call, ~33-47ns per latency sample; at v2's ~58ns p50,
+over half of that was clock overhead. The v1-vs-v2 *ratio* changed too
+(throughput improvement from ~13% to ~22%, p50 from ~24% to ~19%), since
+removing a roughly-constant contamination source from both measurements
+doesn't preserve their relative comparison. Full before/after numbers in
+`bench/RESULTS.md`, which keeps the original contaminated numbers
+labeled as superseded rather than deleting them, an honest record over a
+retroactively cleaned-up one.
+
 ### Follow-up: v2 was O(price range) on a sparse book, not O(1)
 
 An external review of this project caught a real bug in the original

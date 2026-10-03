@@ -106,16 +106,20 @@ the same pre-generated operation stream, so they're directly comparable.
 
 | | Throughput | p50 | p99 | p99.9 |
 |---|---|---|---|---|
-| v1 (`std::map`/`std::list`) | ~10.05M ops/sec | ~72.5ns | ~232.5ns | ~353.5ns |
-| v2 (flat array, intrusive list, object pool) | ~11.34M ops/sec | ~55.3ns | ~213.5ns | ~327.5ns |
+| v1 (`std::map`/`std::list`) | ~16.69M ops/sec | ~71.5ns | ~210.5ns | ~333.8ns |
+| v2 (flat array, intrusive list, object pool) | ~20.44M ops/sec | ~57.75ns | ~201ns | ~318ns |
 
 Measured on an Intel Core i7-13620H (8 cores / 16 threads) under WSL2,
-`cmake --preset release` (GCC 15.2.0, `-O3 -DNDEBUG`). v2 is a real but
-modest win (~13% throughput, ~24% p50), consistent with what profiling v1
-found: node allocation was the biggest cost, v2 removes most of it, but a
+`cmake --preset release` (GCC 15.2.0, `-O3 -DNDEBUG`). Throughput and
+latency are measured in separate passes (see Known limitations), and the
+tool reports its own clock-call overhead (~16-24ns per call) alongside
+every run rather than leaving it unstated. v2 is a real but modest win
+(~22% throughput, ~19% p50), consistent with what profiling v1 found:
+node allocation was the biggest cost, v2 removes most of it, but a
 remaining `unordered_map` in both engines' order index wasn't touched in
-this pass. Full per-run numbers and the profiling-to-optimization story are
-in [bench/RESULTS.md](bench/RESULTS.md) and [docs/DESIGN.md](docs/DESIGN.md).
+this pass. Full per-run numbers, the earlier (since-corrected)
+measurement, and the profiling-to-optimization story are in
+[bench/RESULTS.md](bench/RESULTS.md) and [docs/DESIGN.md](docs/DESIGN.md).
 
 That table uses the same narrow, clustered price distribution as the fuzz
 test, which turned out to hide a real bug: `./build/release/bench/orderbook_sparse_bench`
@@ -177,11 +181,14 @@ full list of what's simplified and why.
   also aren't available under this WSL2 kernel, so `perf` profiling in
   `docs/DESIGN.md` uses `task-clock` software-event sampling, not
   cycle-accurate hardware counters.
-- **Per-op `steady_clock::now()` overhead is baked into every benchmark
-  latency sample.** At tens of nanoseconds of actual engine work, the
-  clock call itself is a non-trivial fraction of what's measured. Mostly
-  affects absolute latency numbers, not the v1-vs-v2 comparison, since the
-  same overhead applies to both.
+- **Per-op `steady_clock::now()` overhead is baked into every latency
+  sample** (p50/p99/p99.9; it does not affect throughput, which is now
+  measured in a separate, uninstrumented pass, see `docs/DESIGN.md` for
+  why that distinction turned out to matter a lot). At tens of
+  nanoseconds of actual engine work, the clock call itself is a
+  non-trivial fraction of what's measured; the benchmark now measures
+  and reports this overhead directly (~16-24ns per call on this
+  machine) rather than leaving it unstated.
 - **Single instrument, no persistence, no network layer.** This is a
   matching-engine library, not a service; there's no order-book recovery,
   multi-symbol routing, or wire protocol, that's out of scope by design.
