@@ -5,8 +5,8 @@
 
 namespace orderbook {
 
-std::vector<Trade> OrderBook::match(Order& incoming, bool isMarket) {
-    std::vector<Trade> trades;
+const std::vector<Trade>& OrderBook::match(Order& incoming, bool isMarket) {
+    tradeBuffer_.clear();  // keeps capacity: no allocation once warmed up
 
     // Generic over bids_/asks_: they're different types (different Compare
     // template argument on std::map), so a single loop body needs to be
@@ -39,7 +39,7 @@ std::vector<Trade> OrderBook::match(Order& incoming, bool isMarket) {
                 t.buyOrderId = counterparty.id;
                 t.sellOrderId = incoming.id;
             }
-            trades.push_back(t);
+            tradeBuffer_.push_back(t);
 
             incoming.qty -= tradeQty;
             counterparty.qty -= tradeQty;
@@ -58,7 +58,7 @@ std::vector<Trade> OrderBook::match(Order& incoming, bool isMarket) {
         matchLoop(bids_);
     }
 
-    return trades;
+    return tradeBuffer_;
 }
 
 void OrderBook::rest(const Order& order) {
@@ -73,12 +73,12 @@ void OrderBook::rest(const Order& order) {
     }
 }
 
-std::vector<Trade> OrderBook::addLimit(OrderId id, Side side, Price px, Qty qty) {
+const std::vector<Trade>& OrderBook::addLimit(OrderId id, Side side, Price px, Qty qty) {
     if (qty == 0) throw std::invalid_argument("OrderBook::addLimit: qty must be > 0");
     if (index_.contains(id)) throw std::invalid_argument("OrderBook::addLimit: duplicate id");
 
     Order incoming{id, side, px, qty, nextSeq_++};
-    std::vector<Trade> trades = match(incoming, /*isMarket=*/false);
+    const std::vector<Trade>& trades = match(incoming, /*isMarket=*/false);
 
     if (incoming.qty > 0) {
         rest(incoming);
@@ -86,7 +86,7 @@ std::vector<Trade> OrderBook::addLimit(OrderId id, Side side, Price px, Qty qty)
     return trades;
 }
 
-std::vector<Trade> OrderBook::addMarket(OrderId id, Side side, Qty qty) {
+const std::vector<Trade>& OrderBook::addMarket(OrderId id, Side side, Qty qty) {
     if (qty == 0) throw std::invalid_argument("OrderBook::addMarket: qty must be > 0");
     if (index_.contains(id)) throw std::invalid_argument("OrderBook::addMarket: duplicate id");
 

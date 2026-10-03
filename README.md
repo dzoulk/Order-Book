@@ -161,8 +161,12 @@ full list of what's simplified and why.
   `OrderBook` and `NaiveOrderBook` have no such restriction. A real
   trade-off for O(1) price-level lookup, not an oversight.
 - **The order index (`unordered_map<OrderId, ...>`) wasn't optimized in
-  v2**, even though profiling flagged it as a real cost (~13.5% of engine
-  time). Replacing it is a legitimate v3 candidate, not in scope here.
+  v2**, even though profiling flagged it as a real cost. `match()` used
+  to also allocate a fresh `std::vector<Trade>` every call (fixed, both
+  engines now reuse an internal buffer); with that gone, profiling
+  `FastOrderBook` directly shows `index_` at ~11.7% of engine time, more
+  than double the remaining allocator overhead (~5%). The clearest v3
+  candidate, not in scope here.
 - **The differential fuzz test's cost scales roughly quadratically with op
   count**, not linearly, because the naive reference's resting-order count
   grows over a long run and its state check is O(n). Deliberate, since the

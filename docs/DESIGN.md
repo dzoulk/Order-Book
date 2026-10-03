@@ -240,6 +240,37 @@ not in the original flat-array/intrusive-list/object-pool plan, and
 doing it well deserves its own measurement pass rather than being bundled
 in here. Noted as a candidate for a future v3, not pretended away.
 
+### Follow-up: match() allocated a fresh vector every call
+
+A second review finding: `match()` returned `std::vector<Trade>` by
+value, built fresh on every call, a heap allocation on the hot path even
+though most calls produce zero or one trade. Exactly the kind of cost v2
+was supposed to eliminate, just hiding in a different place than the
+price-level/order storage.
+
+**Fix:** `OrderBook` and `FastOrderBook` each gained a `tradeBuffer_`
+member, cleared (not deallocated) at the start of every `match()` call
+and filled via `push_back`. `addLimit`/`addMarket`/`match()` now return
+`const std::vector<Trade>&` referencing it, valid until the next call on
+that book. Every existing caller already copies the result immediately
+(`auto trades = book.addLimit(...)` or an explicit `std::vector<Trade>`
+local), so this required no caller changes. `NaiveOrderBook` was left
+alone: it's a correctness oracle, never benchmarked, no reason to add
+the complexity there.
+
+**Verified with `perf`**, profiling `FastOrderBook` directly for the
+first time (`profile_main.cpp`'s `BENCH_ENGINE=v2`, previously it only
+profiled v1): total allocator overhead (`malloc`/`cfree`/`operator new`/
+`operator delete` and glibc internals) is now about 5% of engine time,
+down from the double digits the original v1 profiling found before any
+of v2's allocation-removal work. What's left is overwhelmingly `index_`'s
+`unordered_map`, not match()'s old vector: `_M_erase` + `operator[]` +
+`_M_insert_unique_node` together are about 11.7% of engine time, more
+than double the remaining allocator overhead. This is the first
+direct, v2-specific confirmation (rather than inference from v1's
+numbers) that `index_` is the single biggest remaining optimization
+target for a v3.
+
 ### Follow-up: v2 was O(price range) on a sparse book, not O(1)
 
 An external review of this project caught a real bug in the original

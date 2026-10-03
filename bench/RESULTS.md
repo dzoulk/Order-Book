@@ -1,5 +1,23 @@
 # Benchmark results
 
+## Follow-up: match() no longer allocates a vector per call
+
+A review caught `match()` returning `std::vector<Trade>` by value, a
+fresh heap allocation on every call even when most calls produce zero or
+one trade. Fixed with a reused member buffer (`tradeBuffer_`); see
+`docs/DESIGN.md` for the change itself.
+
+**This specific benchmark's numbers barely moved** (within normal
+run-to-run noise): the per-op `steady_clock::now()` overhead already
+documented below dominates at this scale, so a few nanoseconds saved on
+an allocation that often doesn't even happen (zero-trade ops are common)
+doesn't show up clearly in p50/throughput here. The real evidence is in
+the `perf` profile: profiling `FastOrderBook` directly for the first
+time, total allocator overhead is about 5% of engine time, with
+`index_`'s `unordered_map` operations (about 11.7%) now clearly the
+dominant remaining cost, more than double the allocator. Full numbers in
+`docs/DESIGN.md`.
+
 ## v1 (milestone 4)
 
 **Hardware:** Intel Core i7-13620H (8 cores / 16 threads), 7.6 GiB RAM

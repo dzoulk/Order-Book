@@ -43,8 +43,14 @@ public:
 
     FastOrderBook();
 
-    std::vector<Trade> addLimit(OrderId id, Side side, Price px, Qty qty);
-    std::vector<Trade> addMarket(OrderId id, Side side, Qty qty);
+    // Both return a reference to an internal buffer overwritten by the
+    // next addLimit/addMarket call; see OrderBook::addLimit for why
+    // (removing a per-call allocation found on the hot path during
+    // profiling). Every caller in this codebase copies the result
+    // immediately (`auto trades = ...` or `std::vector<Trade> t = ...`),
+    // which is safe.
+    const std::vector<Trade>& addLimit(OrderId id, Side side, Price px, Qty qty);
+    const std::vector<Trade>& addMarket(OrderId id, Side side, Qty qty);
     bool cancel(OrderId id);
     std::optional<Price> bestBid() const;
     std::optional<Price> bestAsk() const;
@@ -77,7 +83,7 @@ private:
     // word operations, independent of how far away the next level is.
     std::optional<Price> findNextOccupied(const OccupancyBitmap& occupied, Price from, bool searchUpward) const;
 
-    std::vector<Trade> match(Order& incoming, bool isMarket);
+    const std::vector<Trade>& match(Order& incoming, bool isMarket);
     void rest(const Order& order);
 
     std::vector<Level> bidLevels_;
@@ -95,6 +101,7 @@ private:
     std::unordered_map<OrderId, PoolIndex> index_;
     SeqNum nextSeq_ = 0;
     SeqNum nextTradeSeq_ = 0;
+    std::vector<Trade> tradeBuffer_;
 };
 
 } // namespace orderbook

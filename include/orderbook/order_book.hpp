@@ -28,13 +28,22 @@ public:
     // Adds a limit order, matching immediately against the opposite side
     // where price allows, and resting any unfilled remainder. Throws
     // std::invalid_argument on qty == 0 or a duplicate (currently resting) id.
-    std::vector<Trade> addLimit(OrderId id, Side side, Price px, Qty qty);
+    //
+    // Returns a reference to an internal buffer that's overwritten by the
+    // next addLimit/addMarket call. This exists so the common case (zero
+    // or one fill) doesn't allocate a fresh vector every call, profiling
+    // found that allocation on the hot path; see docs/DESIGN.md. Copy
+    // the result (e.g. `std::vector<Trade> t = book.addLimit(...)`,
+    // which is what every caller in this codebase does) if you need it
+    // to outlive the next call.
+    const std::vector<Trade>& addLimit(OrderId id, Side side, Price px, Qty qty);
 
     // Adds a market order, matching immediately against the opposite side
     // until filled or the book is exhausted. Any unfilled remainder is
     // discarded (market orders never rest). Throws std::invalid_argument
-    // on qty == 0 or a duplicate (currently resting) id.
-    std::vector<Trade> addMarket(OrderId id, Side side, Qty qty);
+    // on qty == 0 or a duplicate (currently resting) id. Same buffer-reuse
+    // caveat as addLimit.
+    const std::vector<Trade>& addMarket(OrderId id, Side side, Qty qty);
 
     // Cancels a resting order. Returns false if id is unknown or already
     // fully filled/cancelled.
@@ -56,8 +65,10 @@ private:
     // Matches `incoming` against the opposite side, mutating incoming.qty
     // down as fills happen. Does not insert any unfilled remainder of
     // `incoming`; callers decide whether it rests (limit) or is discarded
-    // (market). When isMarket is true, price is ignored entirely.
-    std::vector<Trade> match(Order& incoming, bool isMarket);
+    // (market). When isMarket is true, price is ignored entirely. Returns
+    // a reference to tradeBuffer_, cleared (not reallocated) at the start
+    // of every call.
+    const std::vector<Trade>& match(Order& incoming, bool isMarket);
 
     // Inserts `order` as a new resting order at the back of its price
     // level's FIFO queue, and records its location in index_.
@@ -68,6 +79,7 @@ private:
     std::unordered_map<OrderId, Location> index_;
     SeqNum nextSeq_ = 0;
     SeqNum nextTradeSeq_ = 0;
+    std::vector<Trade> tradeBuffer_;
 };
 
 } // namespace orderbook

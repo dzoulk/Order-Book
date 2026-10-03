@@ -63,8 +63,8 @@ std::optional<Price> FastOrderBook::findNextOccupied(const OccupancyBitmap& occu
     return found ? std::optional<Price>(static_cast<Price>(*found)) : std::nullopt;
 }
 
-std::vector<Trade> FastOrderBook::match(Order& incoming, bool isMarket) {
-    std::vector<Trade> trades;
+const std::vector<Trade>& FastOrderBook::match(Order& incoming, bool isMarket) {
+    tradeBuffer_.clear();  // keeps capacity: no allocation once warmed up
     bool isBuy = incoming.side == Side::Buy;
     std::vector<Level>& oppositeLevels = isBuy ? askLevels_ : bidLevels_;
     OccupancyBitmap& oppositeOccupied = isBuy ? askOccupied_ : bidOccupied_;
@@ -95,7 +95,7 @@ std::vector<Trade> FastOrderBook::match(Order& incoming, bool isMarket) {
             t.buyOrderId = counterparty.id;
             t.sellOrderId = incoming.id;
         }
-        trades.push_back(t);
+        tradeBuffer_.push_back(t);
 
         incoming.qty -= tradeQty;
         counterparty.qty -= tradeQty;
@@ -115,7 +115,7 @@ std::vector<Trade> FastOrderBook::match(Order& incoming, bool isMarket) {
         }
     }
 
-    return trades;
+    return tradeBuffer_;
 }
 
 void FastOrderBook::rest(const Order& order) {
@@ -136,13 +136,13 @@ void FastOrderBook::rest(const Order& order) {
     }
 }
 
-std::vector<Trade> FastOrderBook::addLimit(OrderId id, Side side, Price px, Qty qty) {
+const std::vector<Trade>& FastOrderBook::addLimit(OrderId id, Side side, Price px, Qty qty) {
     if (qty == 0) throw std::invalid_argument("FastOrderBook::addLimit: qty must be > 0");
     if (px < 0 || px >= kMaxPrice) throw std::out_of_range("FastOrderBook::addLimit: price out of supported band");
     if (index_.contains(id)) throw std::invalid_argument("FastOrderBook::addLimit: duplicate id");
 
     Order incoming{id, side, px, qty, nextSeq_++};
-    std::vector<Trade> trades = match(incoming, /*isMarket=*/false);
+    const std::vector<Trade>& trades = match(incoming, /*isMarket=*/false);
 
     if (incoming.qty > 0) {
         rest(incoming);
@@ -150,7 +150,7 @@ std::vector<Trade> FastOrderBook::addLimit(OrderId id, Side side, Price px, Qty 
     return trades;
 }
 
-std::vector<Trade> FastOrderBook::addMarket(OrderId id, Side side, Qty qty) {
+const std::vector<Trade>& FastOrderBook::addMarket(OrderId id, Side side, Qty qty) {
     if (qty == 0) throw std::invalid_argument("FastOrderBook::addMarket: qty must be > 0");
     if (index_.contains(id)) throw std::invalid_argument("FastOrderBook::addMarket: duplicate id");
 

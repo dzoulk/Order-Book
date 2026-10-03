@@ -8,16 +8,19 @@
 // almost nothing but OrderBook/map/list/unordered_map code.
 //
 // Configuration via environment variables:
-//   BENCH_SEED   seed for reproduction (default: random)
-//   BENCH_OPS    operations to apply (default: 20000000)
+//   BENCH_SEED     seed for reproduction (default: random)
+//   BENCH_OPS      operations to apply (default: 20000000)
+//   BENCH_ENGINE   "v1" (OrderBook, default) or "v2" (FastOrderBook)
 
 #include "flow_gen.hpp"
+#include "orderbook/fast_order_book.hpp"
 #include "orderbook/order_book.hpp"
 
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 using namespace orderbook;
@@ -37,19 +40,11 @@ std::size_t opsFromEnvOrDefault() {
     return 20'000'000;
 }
 
-} // namespace
-
-int main() {
-    std::uint64_t seed = seedFromEnvOrRandom();
-    std::size_t opCount = opsFromEnvOrDefault();
-
-    std::fprintf(stderr, "orderbook profile: generating %zu ops (seed=%llu)...\n", opCount,
-                 static_cast<unsigned long long>(seed));
-    std::vector<GeneratedOp> ops = generateOps(opCount, seed);
-
-    OrderBook book;
-
-    std::fprintf(stderr, "orderbook profile: applying %zu ops (this is what perf should see)...\n", opCount);
+template <typename Book>
+void profile(const char* label, const std::vector<GeneratedOp>& ops) {
+    Book book;
+    std::fprintf(stderr, "orderbook profile [%s]: applying %zu ops (this is what perf should see)...\n", label,
+                 ops.size());
     Clock::time_point start = Clock::now();
     for (const GeneratedOp& op : ops) {
         apply(book, op);
@@ -57,7 +52,26 @@ int main() {
     Clock::time_point end = Clock::now();
 
     double totalSeconds = std::chrono::duration<double>(end - start).count();
-    std::fprintf(stderr, "orderbook profile: done, %.3f s, %.0f ops/sec\n", totalSeconds,
-                 static_cast<double>(opCount) / totalSeconds);
+    std::fprintf(stderr, "orderbook profile [%s]: done, %.3f s, %.0f ops/sec\n", label, totalSeconds,
+                 static_cast<double>(ops.size()) / totalSeconds);
+}
+
+} // namespace
+
+int main() {
+    std::uint64_t seed = seedFromEnvOrRandom();
+    std::size_t opCount = opsFromEnvOrDefault();
+    const char* engine = std::getenv("BENCH_ENGINE");
+    bool useV2 = engine && std::strcmp(engine, "v2") == 0;
+
+    std::fprintf(stderr, "orderbook profile: generating %zu ops (seed=%llu)...\n", opCount,
+                 static_cast<unsigned long long>(seed));
+    std::vector<GeneratedOp> ops = generateOps(opCount, seed);
+
+    if (useV2) {
+        profile<FastOrderBook>("v2", ops);
+    } else {
+        profile<OrderBook>("v1", ops);
+    }
     return 0;
 }
