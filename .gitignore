@@ -1,5 +1,8 @@
 build/
 out/
+.venv/
+__pycache__/
+*.pyc
 bench/results/*.csv
 compile_commands.json
 CMakeUserPresets.json

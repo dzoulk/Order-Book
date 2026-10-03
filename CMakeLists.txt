@@ -7,6 +7,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(ORDERBOOK_BUILD_TESTS "Build unit tests" ON)
 option(ORDERBOOK_BUILD_BENCH "Build benchmark harness" ON)
+option(ORDERBOOK_BUILD_PYTHON "Build Python bindings (requires pybind11)" OFF)
 
 add_subdirectory(src)
 
@@ -17,4 +18,8 @@ endif()
 
 if(ORDERBOOK_BUILD_BENCH)
     add_subdirectory(bench)
+endif()
+
+if(ORDERBOOK_BUILD_PYTHON)
+    add_subdirectory(python)
 endif()

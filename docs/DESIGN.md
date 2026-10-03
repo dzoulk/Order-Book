@@ -11,6 +11,7 @@ get filled in as the milestone they belong to is completed.
 - [x] 4. Benchmark harness + v1 results
 - [x] 5. Profile, v2 optimizations, v1 vs v2 results
 - [x] 6. README polish
+- [x] 7 (stretch). pybind11 bindings + Gymnasium environment
 
 ## Decisions made so far
 
@@ -101,6 +102,43 @@ p99 ~225-240ns, p99.9 ~350-390ns, measured on an i7-13620H under WSL2.
 This run completed in well under a second end to end, so the WSL2
 sleep/suspend timing problem found during the milestone 3 fuzz run isn't a
 concern here, there's no realistic window for the host to sleep mid-run.
+
+## Python bindings and Gymnasium environment (stretch goal)
+
+`python/bindings.cpp` exposes both `OrderBook` and `FastOrderBook` to
+Python via pybind11, same method set on both (`add_limit`, `add_market`,
+`cancel`, `best_bid`, `best_ask`, `depth_at`), snake_cased for Python
+convention. `Trade` is exposed read-only. Exceptions need no custom
+translator: pybind11's default mapping turns `std::invalid_argument` into
+`ValueError` and `std::out_of_range` into `IndexError`, which is exactly
+what both engines already throw for bad input.
+
+**Build note:** linking a static library into a Python extension module
+(a shared object) requires position-independent code. `orderbook_core`
+didn't have that until this stretch goal needed it; `target_properties
+... POSITION_INDEPENDENT_CODE ON` fixed a link error
+(`relocation ... can not be used when making a shared object`). No
+behavioral change, just codegen.
+
+`python/orderbook_gym/env.py` wraps `FastOrderBook` as a Gymnasium
+`Env`: a single agent quotes both sides against randomly generated
+background order flow (same 60/20/10-ish limit/cancel/market shape as the
+C++ generators, reimplemented in Python since the C++ generator isn't
+exposed, only the engine is). Reward is the step-over-step change in
+mark-to-market net worth (`cash + inventory * mid`), not raw cash flow,
+since a market maker holding inventory it paid for isn't "losing" purely
+because cash went out, minus a small quadratic inventory penalty.
+Verified against `gymnasium.utils.env_checker.check_env`, which passes.
+
+**This is explicitly scaffolding, not a tuned RL problem** (that's "for
+later" in the original plan). Known simplifications, deliberate:
+- Fixed-length episodes (`max_steps`), no risk-based or inventory-limit
+  termination.
+- Three-action space (hold / quote both sides / cancel all); no control
+  over quote size, asymmetric quoting, or skew based on inventory.
+- No adverse-selection modeling; background flow is pure random noise
+  around a drifting mid, not informed order flow.
+- Reward has no explicit risk-aversion term beyond the inventory penalty.
 
 ## v1 `OrderBook` design (milestone 2)
 

@@ -31,6 +31,17 @@
       }
     },
     {
+      "name": "python",
+      "displayName": "Python bindings (Release + pybind11, requires .venv)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/python",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ORDERBOOK_BUILD_PYTHON": "ON",
+        "Python3_EXECUTABLE": "${sourceDir}/.venv/bin/python3"
+      }
+    },
+    {
       "name": "sanitize",
       "displayName": "Sanitizer (ASan + UBSan, Linux/GCC or Clang only)",
       "generator": "Ninja",
@@ -51,6 +62,7 @@
     { "name": "debug", "configurePreset": "debug" },
     { "name": "release", "configurePreset": "release" },
     { "name": "profile", "configurePreset": "profile" },
+    { "name": "python", "configurePreset": "python" },
     { "name": "sanitize", "configurePreset": "sanitize" }
   ],
   "testPresets": [

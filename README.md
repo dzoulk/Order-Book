@@ -107,6 +107,24 @@ remaining `unordered_map` in both engines' order index wasn't touched in
 this pass. Full per-run numbers and the profiling-to-optimization story are
 in [bench/RESULTS.md](bench/RESULTS.md) and [docs/DESIGN.md](docs/DESIGN.md).
 
+## Python bindings and RL environment (stretch goal)
+
+```
+cmake --preset python
+cmake --build --preset python
+PYTHONPATH=build/python/python .venv/bin/python3 -m pytest python/tests -v
+```
+
+(First time: `python3 -m venv .venv && .venv/bin/pip install pybind11 gymnasium numpy pytest`.)
+
+`python/bindings.cpp` exposes both `OrderBook` and `FastOrderBook` to
+Python via pybind11. `python/orderbook_gym/env.py` wraps `FastOrderBook`
+as a Gymnasium `Env`, scaffolding for a future market-making RL agent,
+verified against Gymnasium's own `check_env`. This is deliberately not a
+tuned RL problem, fixed-length episodes, a 3-action space, no
+adverse-selection modeling, see [docs/DESIGN.md](docs/DESIGN.md) for the
+full list of what's simplified and why.
+
 ## Known limitations
 
 - **`FastOrderBook` only supports prices in `[0, kMaxPrice)`** (currently
@@ -144,12 +162,15 @@ in [bench/RESULTS.md](bench/RESULTS.md) and [docs/DESIGN.md](docs/DESIGN.md).
   flow internally (see `bench/RESULTS.md` for numbers)
 - `tools/`: optional LOBSTER sample-data loader, not yet built
 - `docs/`: design notes
+- `python/`: pybind11 bindings (`bindings.cpp`) and a Gymnasium
+  environment (`orderbook_gym/`), stretch goal
 
 ## Status
 
-All six milestones are done: scaffolding, a working v1 (`OrderBook`), a
-differential fuzz test and sanitizers, a benchmark harness with v1
-results, a profiled-and-optimized v2 (`FastOrderBook`) with a measured
-v1-vs-v2 comparison, and this README. See [docs/DESIGN.md](docs/DESIGN.md)
-for the complete history, including a stretch goal (pybind11 + Gymnasium
-environment for a future RL market-making agent) that was never started.
+All six planned milestones are done, plus the optional stretch goal:
+scaffolding, a working v1 (`OrderBook`), a differential fuzz test and
+sanitizers, a benchmark harness with v1 results, a profiled-and-optimized
+v2 (`FastOrderBook`) with a measured v1-vs-v2 comparison, this README,
+and Python bindings with a Gymnasium environment for a future RL
+market-making agent. See [docs/DESIGN.md](docs/DESIGN.md) for the
+complete history.

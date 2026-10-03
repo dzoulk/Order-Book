@@ -25,6 +25,27 @@ jobs:
         env:
           ORDERBOOK_FUZZ_OPS: "20000"
 
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python dependencies
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install pybind11 gymnasium numpy pytest
+      - name: Configure
+        run: cmake --preset python
+      - name: Build
+        run: cmake --build --preset python
+      - name: Test
+        run: PYTHONPATH=build/python/python .venv/bin/python3 -m pytest python/tests -v
+
   windows:
     runs-on: windows-latest
     steps:
