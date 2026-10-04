@@ -12,8 +12,8 @@ namespace orderbook {
 // word is non-zero). Finding the next/previous set bit is then at most
 // one O(1) word operation per level, not a linear scan, which is what
 // FastOrderBook needs findNextOccupied to actually be O(1) on a sparse
-// book. See docs/DESIGN.md milestone 5 follow-up for the bug this fixes
-// and the before/after numbers.
+// book. See docs/HISTORY.md ("Bugs found and fixed") for the bug this
+// fixes and the before/after numbers.
 //
 // For n = 1,000,000 (FastOrderBook::kMaxPrice), this is 4 levels
 // (15625, 245, 4, 1 words), so any find is at most 4 word-level checks,

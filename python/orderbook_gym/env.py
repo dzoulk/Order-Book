@@ -1,7 +1,7 @@
 # Minimal Gymnasium environment wrapping FastOrderBook. This is the
 # stretch goal from the project plan: "expose the book to Python and wrap
 # it as a Gymnasium environment", scaffolding for a market-making RL agent
-# to be built later, not a tuned RL problem in itself. See docs/DESIGN.md
+# to be built later, not a tuned RL problem in itself. See docs/HISTORY.md
 # for what's deliberately left simple here and what a real version would
 # need (risk limits, adverse-selection modeling, reward shaping, episode
 # termination beyond a fixed step count, etc).

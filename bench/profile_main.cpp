@@ -1,7 +1,7 @@
 // Minimal driver for `perf record`, deliberately with none of
 // bench_main's instrumentation (no per-op clock_gettime, no sort, no
 // result file write). Those turned out to dominate `perf`'s profile at
-// realistic op counts (see docs/DESIGN.md milestone 5), swamping the
+// realistic op counts (see docs/HISTORY.md), swamping the
 // actual OrderBook cost with benchmark-harness noise. This generates the
 // operation stream once, then applies it in a tight loop with only a
 // single start/end timestamp around the whole thing, so `perf` sees

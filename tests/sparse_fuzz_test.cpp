@@ -2,7 +2,7 @@
 // two price clusters far apart (around 100 and 999,000), chosen randomly
 // per order, instead of fuzz_test.cpp's single narrow band. This is the
 // shape of book that exposed the findNextOccupied pathology (see
-// docs/DESIGN.md milestone 5 follow-up): best-price updates have to jump
+// docs/HISTORY.md): best-price updates have to jump
 // across a huge gap whenever one cluster's resting orders run out. A
 // correctness bug in OccupancyBitmap's cross-cluster lookup would show up
 // here even though it wouldn't necessarily show up in fuzz_test.cpp's

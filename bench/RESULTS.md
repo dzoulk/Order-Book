@@ -1,11 +1,32 @@
 # Benchmark results
 
-## Follow-up: index_ replaced with unordered_dense
+For the current, trustworthy numbers, see the table in
+[../README.md](../README.md) or the "Current results" section below.
+Everything past that is the detailed historical record: every run, every
+methodology fix, kept rather than cleaned up, since an honest record is
+more useful than a tidy one. See [../docs/HISTORY.md](../docs/HISTORY.md)
+for the narrative version of the same story.
 
-The review's last suggested item: `index_` (flagged by profiling as the
-biggest remaining cost in both engines) switched from
+## Current results
+
+Final op mix (45% limit / 20% cancel / 15% reduceQty / 15% replacePrice
+/ 5% market), after all fixes below: v1 ~18.4M ops/sec (p50 ~67ns, p99
+~176ns, p99.9 ~294ns), v2 ~25.5M ops/sec (p50 ~49ns, p99 ~151ns, p99.9
+~257ns). Same hardware/build as every table below (Intel Core i7-13620H,
+WSL2, `cmake --preset release`, GCC 15.2.0, `-O3 -DNDEBUG`).
+
+Sparse-book scenario (`orderbook_sparse_bench`, one resting order far
+from the action, see "Sparse book" below for what this tests): v1 ~45ns,
+v2 ~54ns per add+cancel, both fast, neither pathological. Independently
+re-verified on different hardware: 104ns (v2) vs 146ns (v1), v2 now
+faster than v1 on its own former worst case.
+
+## index_ replaced with unordered_dense
+
+`index_` (flagged by profiling as the biggest remaining cost in both
+engines) switched from
 `std::unordered_map` to `ankerl::unordered_dense::map`, a drop-in,
-contiguous-storage hash map. Full story in `docs/DESIGN.md`, including a
+contiguous-storage hash map. Full story in `docs/HISTORY.md`, including a
 detour where the first wall-clock benchmark after this change showed v1
 getting *slower*, which an isolated A/B test disproved as a real
 regression (reverting to `std::unordered_map` made it slower still), the
@@ -32,15 +53,15 @@ Not used as the headline result for this follow-up, the perf percentages
 above are; included here for completeness and because hiding a
 noisy measurement would be worse than labeling it noisy.
 
-## Follow-up: throughput was still contaminated by clock-call overhead
+## Throughput was still contaminated by clock-call overhead
 
-A review pointed out that reporting clock-call overhead and timing whole
-batches (rather than summing per-op samples) would make the numbers more
-honest. The throughput number already came from a single start/end
-wrapped around the whole measured loop, not a sum of per-op samples, but
-that loop's body still contained the per-op `Clock::now()` calls used for
-the latency samples, so the "whole batch" timer was itself measuring
-time spent in clock calls, not just engine work.
+Reporting clock-call overhead directly, and timing whole batches rather
+than summing per-op samples, makes the numbers more honest. The
+throughput number already came from a single start/end wrapped around
+the whole measured loop, not a sum of per-op samples, but that loop's
+body still contained the per-op `Clock::now()` calls used for the
+latency samples, so the "whole batch" timer was itself measuring time
+spent in clock calls, not just engine work.
 
 **Fix:** throughput and latency are now measured in two separate passes,
 each against its own fresh book instance replaying the identical
@@ -95,12 +116,12 @@ both measurements doesn't preserve their ratio. This is itself worth
 knowing: a flawed measurement methodology doesn't just inflate absolute
 numbers, it can distort the comparison the whole exercise exists to make.
 
-## Follow-up: match() no longer allocates a vector per call
+## match() no longer allocates a vector per call
 
-A review caught `match()` returning `std::vector<Trade>` by value, a
-fresh heap allocation on every call even when most calls produce zero or
-one trade. Fixed with a reused member buffer (`tradeBuffer_`); see
-`docs/DESIGN.md` for the change itself.
+`match()` returned `std::vector<Trade>` by value, a fresh heap
+allocation on every call even when most calls produce zero or one
+trade. Fixed with a reused member buffer (`tradeBuffer_`); see
+`docs/HISTORY.md` for the change itself.
 
 **This specific benchmark's numbers barely moved** (within normal
 run-to-run noise): the per-op `steady_clock::now()` overhead already
@@ -111,7 +132,7 @@ the `perf` profile: profiling `FastOrderBook` directly for the first
 time, total allocator overhead is about 5% of engine time, with
 `index_`'s `unordered_map` operations (about 11.7%) now clearly the
 dominant remaining cost, more than double the allocator. Full numbers in
-`docs/DESIGN.md`.
+`docs/HISTORY.md`.
 
 ## v1 (milestone 4, original measurement, since corrected above)
 
@@ -159,8 +180,8 @@ v1-vs-v2 comparison:**
   being measured. This mostly affects the absolute latency numbers, not
   the v1-vs-v2 comparison, since the same overhead applies to both.
 - **Hardware PMU counters aren't available under this WSL2 kernel** (see
-  `docs/DESIGN.md`), so milestone 5 profiling will use `perf`'s
-  `task-clock`-based sampling instead of cycle-accurate profiling.
+  `docs/DESIGN.md`), so profiling uses `perf`'s `task-clock`-based
+  sampling instead of cycle-accurate profiling.
 
 ## v2 (milestone 5, original measurement, since corrected above)
 
@@ -192,16 +213,18 @@ roughly 10% lower p99.9** (excluding the one outlier run). Real, but more
 modest than the profiling might suggest at first glance, worth explaining
 rather than just reporting:
 
-Milestone 5's profiling found three engine-side cost centers: `malloc`/
-`cfree` and allocator internals (~17% of engine time), `std::map`
-red-black tree operations (~3.85%), and `index_`'s `unordered_map`
-operations (~13.5%). `FastOrderBook`'s flat array + intrusive list +
-object pool directly targets the first two (~21% combined), by design it
-does **not** touch `index_`, which stays an `unordered_map` in v2 (see
-docs/DESIGN.md for why). So the ~13-24% measured improvement lines up
-with removing roughly that ~21% slice of engine time while the ~13.5%
-`index_` cost rides along unchanged, not a shortfall against the
-profiling data, confirmation of it. The biggest remaining opportunity for
+Profiling found three engine-side cost centers: `malloc`/`cfree` and
+allocator internals (~17% of engine time), `std::map` red-black tree
+operations (~3.85%), and `index_`'s `unordered_map` operations (~13.5%).
+`FastOrderBook`'s flat array + intrusive list + object pool directly
+targets the first two (~21% combined), by design it does **not** touch
+`index_` at this point, which stays an `unordered_map` in v2 here (see
+docs/DESIGN.md for the current state; it's since been replaced, see
+"index_ replaced with unordered_dense" above). So the ~13-24% measured
+improvement lines up with removing roughly that ~21% slice of engine
+time while the ~13.5% `index_` cost rides along unchanged, not a
+shortfall against the profiling data, confirmation of it. The biggest
+remaining opportunity for
 a v3 would be `index_` itself.
 
 **Same caveats as v1 apply** (WSL2-not-bare-metal, per-op clock-call
@@ -235,7 +258,7 @@ problem: nothing in this file's methodology would ever generate a price
 900,000 ticks from the action, so nothing caught it.
 
 **After the fix** (`OccupancyBitmap`, a hierarchical bitmap, see
-`docs/DESIGN.md`):
+`docs/HISTORY.md`):
 
 ```
 sparse_bench [v1]: 48 ns per add+cancel (2000 iters)

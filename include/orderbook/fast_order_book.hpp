@@ -12,10 +12,9 @@
 namespace orderbook {
 
 // v2: same public interface as OrderBook, built for speed instead of
-// simplicity. See docs/DESIGN.md milestone 5 for the profiling that
-// motivated this design and the full v1-vs-v2 numbers, and the milestone
-// 5 follow-up for why bestBid/bestAsk use a hierarchical bitmap rather
-// than a plain linear scan.
+// simplicity. See docs/DESIGN.md for the current design, and
+// docs/HISTORY.md for the profiling that motivated it and the full
+// v1-vs-v2 numbers.
 //
 // - bidLevels_/askLevels_: flat std::vector<Level>, indexed directly by
 //   price. Replaces std::map's red-black tree (O(log n), one node alloc
@@ -32,7 +31,7 @@ namespace orderbook {
 //   in the worst case: a sparse book (one resting order far from where
 //   activity is happening) made cancel/match thousands of times slower
 //   than v1. That bug, how it was found, and the fix are in
-//   docs/DESIGN.md.
+//   docs/HISTORY.md.
 //
 // Known limitation: only prices in [0, kMaxPrice) are supported; addLimit
 // throws std::out_of_range outside that band. OrderBook and
@@ -131,7 +130,7 @@ private:
     // ankerl::unordered_dense::map, not std::unordered_map: profiling
     // found index_ costing ~13.5-11.7% of engine time, node-based maps
     // allocate a separate node per entry; this stores entries
-    // contiguously instead. See docs/DESIGN.md for the before/after.
+    // contiguously instead. See docs/HISTORY.md for the before/after.
     ankerl::unordered_dense::map<OrderId, PoolIndex> index_;
     SeqNum nextSeq_ = 0;
     SeqNum nextTradeSeq_ = 0;

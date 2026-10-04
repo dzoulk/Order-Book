@@ -27,8 +27,8 @@
 // Latencies are stored as integer nanoseconds, not double: steady_clock's
 // resolution doesn't justify sub-nanosecond precision, and integer
 // formatting is far cheaper than float formatting when writing millions of
-// samples to the output file (see profile_main.cpp and docs/DESIGN.md for
-// how much this mattered while profiling).
+// samples to the output file (see profile_main.cpp and docs/HISTORY.md
+// for how much this mattered while profiling).
 //
 // Configuration via environment variables:
 //   BENCH_SEED         seed for reproduction (default: random)

@@ -27,7 +27,7 @@ namespace orderbook {
 //           erasing an unrelated order. unordered_dense (not
 //           std::unordered_map) because profiling found node-based maps
 //           allocating a separate node per entry was a real cost; this
-//           stores entries contiguously instead. See docs/DESIGN.md.
+//           stores entries contiguously instead. See docs/HISTORY.md.
 class OrderBook {
 public:
     // Adds a limit order, matching immediately against the opposite side
@@ -37,7 +37,7 @@ public:
     // Returns a reference to an internal buffer that's overwritten by the
     // next addLimit/addMarket call. This exists so the common case (zero
     // or one fill) doesn't allocate a fresh vector every call, profiling
-    // found that allocation on the hot path; see docs/DESIGN.md. Copy
+    // found that allocation on the hot path; see docs/HISTORY.md. Copy
     // the result (e.g. `std::vector<Trade> t = book.addLimit(...)`,
     // which is what every caller in this codebase does) if you need it
     // to outlive the next call.
