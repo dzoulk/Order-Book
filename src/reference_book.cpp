@@ -113,6 +113,37 @@ bool NaiveOrderBook::cancel(OrderId id) {
     return false;
 }
 
+bool NaiveOrderBook::reduceQty(OrderId id, Qty newQty) {
+    for (Order& o : resting_) {
+        if (o.id == id) {
+            if (newQty == 0 || newQty >= o.qty) {
+                throw std::invalid_argument(
+                    "NaiveOrderBook::reduceQty: newQty must be > 0 and < current qty");
+            }
+            o.qty = newQty;
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<Trade> NaiveOrderBook::replacePrice(OrderId id, Price newPrice) {
+    for (std::size_t i = 0; i < resting_.size(); ++i) {
+        if (resting_[i].id == id) {
+            Side side = resting_[i].side;
+            Qty qty = resting_[i].qty;
+            resting_[i] = resting_.back();
+            resting_.pop_back();
+
+            Order incoming{id, side, newPrice, qty, nextSeq_++};
+            std::vector<Trade> trades = match(incoming, /*isMarket=*/false);
+            if (incoming.qty > 0) resting_.push_back(incoming);
+            return trades;
+        }
+    }
+    throw std::invalid_argument("NaiveOrderBook::replacePrice: unknown id");
+}
+
 std::optional<Price> NaiveOrderBook::bestBid() const {
     std::optional<Price> best;
     for (const Order& o : resting_) {

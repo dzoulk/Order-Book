@@ -52,6 +52,21 @@ public:
     const std::vector<Trade>& addLimit(OrderId id, Side side, Price px, Qty qty);
     const std::vector<Trade>& addMarket(OrderId id, Side side, Qty qty);
     bool cancel(OrderId id);
+
+    // Reduces a resting order's quantity in place, keeping its FIFO
+    // priority. Returns false if id is unknown. Throws
+    // std::invalid_argument if newQty is 0 or >= the order's current
+    // quantity.
+    bool reduceQty(OrderId id, Qty newQty);
+
+    // Cancels the resting order at its old price and re-inserts it at
+    // newPrice with a fresh sequence number, losing FIFO priority.
+    // Quantity carries over unchanged. May match immediately if
+    // newPrice crosses the book. Throws std::invalid_argument if id is
+    // unknown, or std::out_of_range if newPrice is outside
+    // [0, kMaxPrice). Same buffer-reuse caveat as addLimit.
+    const std::vector<Trade>& replacePrice(OrderId id, Price newPrice);
+
     std::optional<Price> bestBid() const;
     std::optional<Price> bestAsk() const;
     Qty depthAt(Side side, Price px) const;
@@ -71,7 +86,7 @@ private:
         PoolIndex next = kInvalidIndex;
     };
 
-    PoolIndex allocateNode(const Order& order);
+    PoolIndex allocateNode();
     void freeNode(PoolIndex idx);
     void pushBack(Level& level, PoolIndex idx);
     // Removes idx from `level`'s list. Does not update bestBid_/bestAsk_;
@@ -85,6 +100,20 @@ private:
 
     const std::vector<Trade>& match(Order& incoming, bool isMarket);
     void rest(const Order& order);
+
+    // Removes `order` (already known to live at idx) from its side's
+    // level/occupancy-bitmap/best-price-cache/count, but does not touch
+    // index_ or free the pool slot; callers decide what happens to idx
+    // next (freeNode for cancel, or reuse it via placeAtIndex for
+    // replacePrice). Shared by cancel(), replacePrice(), and match()'s
+    // fully-filled-counterparty case.
+    void removeFromBook(const Order& order, PoolIndex idx);
+
+    // Installs `order` into pool_[idx] and this side's level/occupancy
+    // bitmap/best-price-cache/count/index_. idx must already be a valid,
+    // currently-unlinked pool slot (freshly allocated, or reused from a
+    // replacePrice that unlinked it but didn't free it).
+    void placeAtIndex(PoolIndex idx, const Order& order);
 
     std::vector<Level> bidLevels_;
     std::vector<Level> askLevels_;

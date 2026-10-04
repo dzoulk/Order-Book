@@ -39,6 +39,12 @@ implementation, and a measured (not guessed) v1 → v2 performance story.
   occupied level with a linear scan, genuinely O(price range) on a sparse
   book, see Known limitations for the numbers and the fix. Trade-off:
   only supports prices in `[0, kMaxPrice)` (see Known limitations).
+- **Order modification (`reduceQty`, `replacePrice`), same across all
+  three engines.** Reducing quantity keeps FIFO priority, it's still the
+  same order asking for less. Replacing price loses it, it's a
+  different price level with no queue position to preserve. This is the
+  real-world priority rule (seen in e.g. FIX Cancel/Replace) made
+  explicit as two operations instead of one ambiguous "modify".
 - Full rationale, the profiling data that drove v2's design, and every
   decision's "why" lives in [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -71,9 +77,11 @@ suite (same behavioral tests run against `NaiveOrderBook`, `OrderBook`, and
 main differential fuzz test, and a second sparse-book fuzz test.
 
 The main fuzz test (`tests/fuzz_test.cpp`) feeds the same random operation
-stream to all three books and checks they agree after every single
-operation, both on returned trades and on full book state. Configurable
-via environment variables:
+stream (limit/cancel/reduceQty/replacePrice/market) to all three books
+and checks they agree after every single operation, both on returned
+trades and on full book state, including consistent throw-or-not
+behavior for reduceQty/replacePrice. Configurable via environment
+variables:
 
 ```
 ORDERBOOK_FUZZ_SEED=<seed>   # reproduce a specific run (default: random)

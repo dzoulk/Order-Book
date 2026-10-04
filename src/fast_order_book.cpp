@@ -9,15 +9,14 @@ FastOrderBook::FastOrderBook() : bidLevels_(kMaxPrice), askLevels_(kMaxPrice) {
     pool_.reserve(1 << 16);  // generous for realistic concurrent resting-order counts
 }
 
-FastOrderBook::PoolIndex FastOrderBook::allocateNode(const Order& order) {
+FastOrderBook::PoolIndex FastOrderBook::allocateNode() {
     if (freeListHead_ != kInvalidIndex) {
         PoolIndex idx = freeListHead_;
         freeListHead_ = pool_[idx].next;
-        pool_[idx] = PoolNode{order, kInvalidIndex, kInvalidIndex};
         return idx;
     }
     PoolIndex idx = static_cast<PoolIndex>(pool_.size());
-    pool_.push_back(PoolNode{order, kInvalidIndex, kInvalidIndex});
+    pool_.push_back(PoolNode{});
     return idx;
 }
 
@@ -63,13 +62,58 @@ std::optional<Price> FastOrderBook::findNextOccupied(const OccupancyBitmap& occu
     return found ? std::optional<Price>(static_cast<Price>(*found)) : std::nullopt;
 }
 
+void FastOrderBook::removeFromBook(const Order& order, PoolIndex idx) {
+    if (order.side == Side::Buy) {
+        Level& level = bidLevels_[static_cast<std::size_t>(order.price)];
+        unlink(level, idx);
+        --bidCount_;
+        if (level.head == kInvalidIndex) {
+            bidOccupied_.clear(static_cast<std::size_t>(order.price));
+            if (bestBidPrice_ == order.price) {
+                bestBidPrice_ = (bidCount_ == 0)
+                                    ? std::nullopt
+                                    : findNextOccupied(bidOccupied_, order.price, /*searchUpward=*/false);
+            }
+        }
+    } else {
+        Level& level = askLevels_[static_cast<std::size_t>(order.price)];
+        unlink(level, idx);
+        --askCount_;
+        if (level.head == kInvalidIndex) {
+            askOccupied_.clear(static_cast<std::size_t>(order.price));
+            if (bestAskPrice_ == order.price) {
+                bestAskPrice_ = (askCount_ == 0)
+                                    ? std::nullopt
+                                    : findNextOccupied(askOccupied_, order.price, /*searchUpward=*/true);
+            }
+        }
+    }
+}
+
+void FastOrderBook::placeAtIndex(PoolIndex idx, const Order& order) {
+    pool_[idx].order = order;
+    pool_[idx].prev = kInvalidIndex;
+    pool_[idx].next = kInvalidIndex;
+    if (order.side == Side::Buy) {
+        pushBack(bidLevels_[static_cast<std::size_t>(order.price)], idx);
+        bidOccupied_.set(static_cast<std::size_t>(order.price));
+        index_[order.id] = idx;
+        ++bidCount_;
+        if (!bestBidPrice_.has_value() || order.price > *bestBidPrice_) bestBidPrice_ = order.price;
+    } else {
+        pushBack(askLevels_[static_cast<std::size_t>(order.price)], idx);
+        askOccupied_.set(static_cast<std::size_t>(order.price));
+        index_[order.id] = idx;
+        ++askCount_;
+        if (!bestAskPrice_.has_value() || order.price < *bestAskPrice_) bestAskPrice_ = order.price;
+    }
+}
+
 const std::vector<Trade>& FastOrderBook::match(Order& incoming, bool isMarket) {
     tradeBuffer_.clear();  // keeps capacity: no allocation once warmed up
     bool isBuy = incoming.side == Side::Buy;
     std::vector<Level>& oppositeLevels = isBuy ? askLevels_ : bidLevels_;
-    OccupancyBitmap& oppositeOccupied = isBuy ? askOccupied_ : bidOccupied_;
     std::optional<Price>& oppositeBest = isBuy ? bestAskPrice_ : bestBidPrice_;
-    std::size_t& oppositeCount = isBuy ? askCount_ : bidCount_;
 
     while (incoming.qty > 0 && oppositeBest.has_value()) {
         Price levelPrice = *oppositeBest;
@@ -102,16 +146,10 @@ const std::vector<Trade>& FastOrderBook::match(Order& incoming, bool isMarket) {
 
         if (counterparty.qty == 0) {
             OrderId counterpartyId = counterparty.id;
-            unlink(level, counterpartyIdx);
+            Order counterpartyOrder = counterparty;  // copy: removeFromBook needs it after unlink
+            removeFromBook(counterpartyOrder, counterpartyIdx);
             freeNode(counterpartyIdx);
             index_.erase(counterpartyId);
-            --oppositeCount;
-
-            if (level.head == kInvalidIndex) {
-                oppositeOccupied.clear(static_cast<std::size_t>(levelPrice));
-                oppositeBest = (oppositeCount == 0) ? std::nullopt
-                                                     : findNextOccupied(oppositeOccupied, levelPrice, isBuy);
-            }
         }
     }
 
@@ -119,21 +157,8 @@ const std::vector<Trade>& FastOrderBook::match(Order& incoming, bool isMarket) {
 }
 
 void FastOrderBook::rest(const Order& order) {
-    if (order.side == Side::Buy) {
-        PoolIndex idx = allocateNode(order);
-        pushBack(bidLevels_[static_cast<std::size_t>(order.price)], idx);
-        bidOccupied_.set(static_cast<std::size_t>(order.price));
-        index_[order.id] = idx;
-        ++bidCount_;
-        if (!bestBidPrice_.has_value() || order.price > *bestBidPrice_) bestBidPrice_ = order.price;
-    } else {
-        PoolIndex idx = allocateNode(order);
-        pushBack(askLevels_[static_cast<std::size_t>(order.price)], idx);
-        askOccupied_.set(static_cast<std::size_t>(order.price));
-        index_[order.id] = idx;
-        ++askCount_;
-        if (!bestAskPrice_.has_value() || order.price < *bestAskPrice_) bestAskPrice_ = order.price;
-    }
+    PoolIndex idx = allocateNode();
+    placeAtIndex(idx, order);
 }
 
 const std::vector<Trade>& FastOrderBook::addLimit(OrderId id, Side side, Price px, Qty qty) {
@@ -163,37 +188,47 @@ bool FastOrderBook::cancel(OrderId id) {
     if (it == index_.end()) return false;
 
     PoolIndex idx = it->second;
-    Order order = pool_[idx].order;  // copy: order fields are needed after unlink/free below
+    Order order = pool_[idx].order;  // copy: needed after removeFromBook unlinks it below
 
-    if (order.side == Side::Buy) {
-        Level& level = bidLevels_[static_cast<std::size_t>(order.price)];
-        unlink(level, idx);
-        --bidCount_;
-        if (level.head == kInvalidIndex) {
-            bidOccupied_.clear(static_cast<std::size_t>(order.price));
-            if (bestBidPrice_ == order.price) {
-                bestBidPrice_ = (bidCount_ == 0)
-                                    ? std::nullopt
-                                    : findNextOccupied(bidOccupied_, order.price, /*searchUpward=*/false);
-            }
-        }
-    } else {
-        Level& level = askLevels_[static_cast<std::size_t>(order.price)];
-        unlink(level, idx);
-        --askCount_;
-        if (level.head == kInvalidIndex) {
-            askOccupied_.clear(static_cast<std::size_t>(order.price));
-            if (bestAskPrice_ == order.price) {
-                bestAskPrice_ = (askCount_ == 0)
-                                    ? std::nullopt
-                                    : findNextOccupied(askOccupied_, order.price, /*searchUpward=*/true);
-            }
-        }
-    }
-
+    removeFromBook(order, idx);
     freeNode(idx);
     index_.erase(it);
     return true;
+}
+
+bool FastOrderBook::reduceQty(OrderId id, Qty newQty) {
+    auto it = index_.find(id);
+    if (it == index_.end()) return false;
+
+    Qty currentQty = pool_[it->second].order.qty;
+    if (newQty == 0 || newQty >= currentQty) {
+        throw std::invalid_argument("FastOrderBook::reduceQty: newQty must be > 0 and < current qty");
+    }
+    pool_[it->second].order.qty = newQty;  // same slot, same list position: no relinking needed
+    return true;
+}
+
+const std::vector<Trade>& FastOrderBook::replacePrice(OrderId id, Price newPrice) {
+    if (newPrice < 0 || newPrice >= kMaxPrice) {
+        throw std::out_of_range("FastOrderBook::replacePrice: price out of supported band");
+    }
+    auto it = index_.find(id);
+    if (it == index_.end()) throw std::invalid_argument("FastOrderBook::replacePrice: unknown id");
+
+    PoolIndex idx = it->second;
+    Order order = pool_[idx].order;  // copy: needed after removeFromBook unlinks it below
+    removeFromBook(order, idx);
+    index_.erase(it);
+
+    Order incoming{id, order.side, newPrice, order.qty, nextSeq_++};
+    const std::vector<Trade>& trades = match(incoming, /*isMarket=*/false);
+
+    if (incoming.qty > 0) {
+        placeAtIndex(idx, incoming);  // reuse the same pool slot, no free+reallocate
+    } else {
+        freeNode(idx);
+    }
+    return trades;
 }
 
 std::optional<Price> FastOrderBook::bestBid() const {

@@ -107,3 +107,60 @@ TYPED_TEST(OrderBookTest, DuplicateIdThrows) {
 TYPED_TEST(OrderBookTest, ZeroQtyThrows) {
     EXPECT_THROW(this->book.addLimit(1, Side::Buy, 100, 0), std::invalid_argument);
 }
+
+TYPED_TEST(OrderBookTest, ReduceQtyKeepsFifoPriority) {
+    this->book.addLimit(1, Side::Sell, 100, 10);
+    this->book.addLimit(2, Side::Sell, 100, 5);
+    EXPECT_TRUE(this->book.reduceQty(1, 3));  // order 1 now wants 3, not 10
+    EXPECT_EQ(this->book.depthAt(Side::Sell, 100), 8u);  // 3 + 5
+
+    auto trades = this->book.addLimit(3, Side::Buy, 100, 4);
+    // order 1 still fills first (reducing qty didn't send it to the back
+    // of the queue), for its new smaller quantity, then order 2 for the rest.
+    ASSERT_EQ(trades.size(), 2u);
+    EXPECT_EQ(trades[0].sellOrderId, 1u);
+    EXPECT_EQ(trades[0].qty, 3u);
+    EXPECT_EQ(trades[1].sellOrderId, 2u);
+    EXPECT_EQ(trades[1].qty, 1u);
+}
+
+TYPED_TEST(OrderBookTest, ReduceQtyUnknownIdReturnsFalse) {
+    EXPECT_FALSE(this->book.reduceQty(99, 1));
+}
+
+TYPED_TEST(OrderBookTest, ReduceQtyRejectsIncreaseOrNoOp) {
+    this->book.addLimit(1, Side::Sell, 100, 10);
+    EXPECT_THROW(this->book.reduceQty(1, 10), std::invalid_argument);  // not a reduction
+    EXPECT_THROW(this->book.reduceQty(1, 20), std::invalid_argument);  // increase
+    EXPECT_THROW(this->book.reduceQty(1, 0), std::invalid_argument);   // use cancel for that
+}
+
+TYPED_TEST(OrderBookTest, ReplacePriceLosesFifoPriority) {
+    this->book.addLimit(1, Side::Sell, 100, 5);
+    this->book.addLimit(2, Side::Sell, 101, 5);
+
+    auto trades = this->book.replacePrice(1, 101);  // order 1 moves to order 2's price
+    EXPECT_TRUE(trades.empty());                    // 101 doesn't cross any resting bid
+    EXPECT_EQ(this->book.depthAt(Side::Sell, 100), 0u);
+    EXPECT_EQ(this->book.depthAt(Side::Sell, 101), 10u);
+
+    auto fillTrades = this->book.addLimit(3, Side::Buy, 101, 5);
+    ASSERT_EQ(fillTrades.size(), 1u);
+    EXPECT_EQ(fillTrades[0].sellOrderId, 2u);  // order 2 fills first: it was already at 101
+}
+
+TYPED_TEST(OrderBookTest, ReplacePriceCanMatchImmediately) {
+    this->book.addLimit(1, Side::Buy, 95, 10);
+    this->book.addLimit(2, Side::Sell, 100, 5);  // resting, out of the money for the bid above
+
+    auto trades = this->book.replacePrice(2, 95);  // now crosses the resting bid
+    ASSERT_EQ(trades.size(), 1u);
+    EXPECT_EQ(trades[0].buyOrderId, 1u);
+    EXPECT_EQ(trades[0].sellOrderId, 2u);
+    EXPECT_EQ(trades[0].qty, 5u);
+    EXPECT_FALSE(this->book.bestAsk().has_value());
+}
+
+TYPED_TEST(OrderBookTest, ReplacePriceUnknownIdThrows) {
+    EXPECT_THROW(this->book.replacePrice(99, 100), std::invalid_argument);
+}

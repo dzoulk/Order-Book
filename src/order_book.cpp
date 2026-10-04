@@ -73,10 +73,7 @@ void OrderBook::rest(const Order& order) {
     }
 }
 
-const std::vector<Trade>& OrderBook::addLimit(OrderId id, Side side, Price px, Qty qty) {
-    if (qty == 0) throw std::invalid_argument("OrderBook::addLimit: qty must be > 0");
-    if (index_.contains(id)) throw std::invalid_argument("OrderBook::addLimit: duplicate id");
-
+const std::vector<Trade>& OrderBook::insertAndMatch(OrderId id, Side side, Price px, Qty qty) {
     Order incoming{id, side, px, qty, nextSeq_++};
     const std::vector<Trade>& trades = match(incoming, /*isMarket=*/false);
 
@@ -84,6 +81,12 @@ const std::vector<Trade>& OrderBook::addLimit(OrderId id, Side side, Price px, Q
         rest(incoming);
     }
     return trades;
+}
+
+const std::vector<Trade>& OrderBook::addLimit(OrderId id, Side side, Price px, Qty qty) {
+    if (qty == 0) throw std::invalid_argument("OrderBook::addLimit: qty must be > 0");
+    if (index_.contains(id)) throw std::invalid_argument("OrderBook::addLimit: duplicate id");
+    return insertAndMatch(id, side, px, qty);
 }
 
 const std::vector<Trade>& OrderBook::addMarket(OrderId id, Side side, Qty qty) {
@@ -95,11 +98,7 @@ const std::vector<Trade>& OrderBook::addMarket(OrderId id, Side side, Qty qty) {
     // Any unfilled remainder is discarded: market orders never rest.
 }
 
-bool OrderBook::cancel(OrderId id) {
-    auto it = index_.find(id);
-    if (it == index_.end()) return false;
-
-    const Location& loc = it->second;
+void OrderBook::removeFromBook(const Location& loc) {
     if (loc.side == Side::Buy) {
         auto levelIt = bids_.find(loc.price);
         levelIt->second.erase(loc.it);
@@ -109,8 +108,39 @@ bool OrderBook::cancel(OrderId id) {
         levelIt->second.erase(loc.it);
         if (levelIt->second.empty()) asks_.erase(levelIt);
     }
+}
+
+bool OrderBook::cancel(OrderId id) {
+    auto it = index_.find(id);
+    if (it == index_.end()) return false;
+
+    removeFromBook(it->second);
     index_.erase(it);
     return true;
+}
+
+bool OrderBook::reduceQty(OrderId id, Qty newQty) {
+    auto it = index_.find(id);
+    if (it == index_.end()) return false;
+
+    Qty currentQty = it->second.it->qty;
+    if (newQty == 0 || newQty >= currentQty) {
+        throw std::invalid_argument("OrderBook::reduceQty: newQty must be > 0 and < current qty");
+    }
+    it->second.it->qty = newQty;  // std::list iterator stability makes this a safe in-place mutation
+    return true;
+}
+
+const std::vector<Trade>& OrderBook::replacePrice(OrderId id, Price newPrice) {
+    auto it = index_.find(id);
+    if (it == index_.end()) throw std::invalid_argument("OrderBook::replacePrice: unknown id");
+
+    Location loc = it->second;
+    Order order = *loc.it;  // copy: needed after removeFromBook invalidates loc.it below
+    removeFromBook(loc);
+    index_.erase(it);
+
+    return insertAndMatch(id, order.side, newPrice, order.qty);
 }
 
 std::optional<Price> OrderBook::bestBid() const {

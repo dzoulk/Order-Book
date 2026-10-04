@@ -365,3 +365,61 @@ used the same narrow, clustered price distribution, which is realistic
 for *typical* order flow but hid a real worst-case bug. "What happens on
 a sparse book" is exactly the kind of question that distribution could
 never have surfaced on its own.
+
+## Order modification: reduceQty and replacePrice
+
+A review suggested this as a natural feature with a good interview
+talking point: the priority rule. Implemented identically (same method
+names, same semantics) across all three engines, so they stay
+differentially testable the same way everything else in this project is.
+
+- **`reduceQty(id, newQty)`**: shrinks a resting order's quantity in
+  place, keeping its FIFO priority. It's still the same order, just
+  asking for less, there's no reason to send it to the back of the
+  queue. Throws `std::invalid_argument` if `newQty` is 0 or >= the
+  order's current quantity (increasing size, or a no-op "reduction",
+  isn't what this operation is for). Returns `false` if `id` is unknown.
+- **`replacePrice(id, newPrice)`**: cancels the resting order at its old
+  price and re-inserts it at `newPrice` with a fresh sequence number,
+  losing FIFO priority. It's a different price level; there's no
+  queue position to keep. Quantity carries over unchanged. Can match
+  immediately if the new price crosses the book. Throws
+  `std::invalid_argument` if `id` is unknown (a deliberate choice, see
+  below), or `std::out_of_range` (`FastOrderBook` only) if `newPrice` is
+  outside `[0, kMaxPrice)`.
+
+**Design decision: `replacePrice` throws on unknown id, `cancel` returns
+`false`.** In a real system, trying to amend an order that already got
+filled or cancelled is a normal race condition, not a bug, an argument
+for returning a sentinel like `cancel` does. This project throws instead,
+for API simplicity (one return type, no ambiguity between "not found"
+and "found but nothing happened"). That's a deliberate simplification,
+not an oversight, and a real production system would need to handle the
+race-condition case explicitly.
+
+**`FastOrderBook` implementation note:** `replacePrice` reuses the same
+object-pool slot across the price change instead of freeing it and
+allocating a new one, via two new shared helpers:
+`removeFromBook(order, idx)` (unlink from the old level, update the
+occupancy bitmap and cached best price, used by `cancel`, `replacePrice`,
+and `match`'s fully-filled-counterparty case) and `placeAtIndex(idx, order)`
+(install into a new level, used by `rest` and `replacePrice`). This also
+simplified `allocateNode`, which no longer takes an `Order` parameter,
+it just reserves a slot; populating it is `placeAtIndex`'s job now,
+not duplicated in two places.
+
+**Testing:** typed unit tests cover both the priority-kept and
+priority-lost behavior directly (`tests/book_test.cpp`,
+`ReduceQtyKeepsFifoPriority` / `ReplacePriceLosesFifoPriority`), plus
+error cases. Both fuzz tests (`tests/fuzz_test.cpp`,
+`tests/sparse_fuzz_test.cpp`) now generate `reduceQty`/`replacePrice`
+ops too (15% each of the op mix), comparing naive/v1/v2 both on thrown
+exceptions (consistent throw-or-not across all three) and on resulting
+trades/state when none throw. `sparse_fuzz_test.cpp`'s `replacePrice`
+reuses its cluster-picking logic, so a meaningful fraction of replaces
+jump an order from one price cluster to the other, exactly the
+cross-cluster transition that test exists to stress.
+
+Exposed to Python too (`python/bindings.cpp`: `reduce_qty`,
+`replace_price`), same exception-translation behavior as the other
+methods (no custom work needed).

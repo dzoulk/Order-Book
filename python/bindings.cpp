@@ -27,6 +27,8 @@ void bindBook(py::module_& m, const char* name) {
         .def("add_limit", &Book::addLimit, py::arg("id"), py::arg("side"), py::arg("price"), py::arg("qty"))
         .def("add_market", &Book::addMarket, py::arg("id"), py::arg("side"), py::arg("qty"))
         .def("cancel", &Book::cancel, py::arg("id"))
+        .def("reduce_qty", &Book::reduceQty, py::arg("id"), py::arg("new_qty"))
+        .def("replace_price", &Book::replacePrice, py::arg("id"), py::arg("new_price"))
         .def("best_bid", &Book::bestBid)
         .def("best_ask", &Book::bestAsk)
         .def("depth_at", &Book::depthAt, py::arg("side"), py::arg("price"));

@@ -49,6 +49,19 @@ public:
     // fully filled/cancelled.
     bool cancel(OrderId id);
 
+    // Reduces a resting order's quantity in place, keeping its FIFO
+    // priority (it's still the same order, just asking for less).
+    // Returns false if id is unknown. Throws std::invalid_argument if
+    // newQty is 0 or >= the order's current quantity.
+    bool reduceQty(OrderId id, Qty newQty);
+
+    // Cancels the resting order at its old price and re-inserts it at
+    // newPrice with a fresh sequence number, losing FIFO priority.
+    // Quantity carries over unchanged. May match immediately if newPrice
+    // crosses the book. Throws std::invalid_argument if id is unknown.
+    // Same buffer-reuse caveat as addLimit.
+    const std::vector<Trade>& replacePrice(OrderId id, Price newPrice);
+
     std::optional<Price> bestBid() const;
     std::optional<Price> bestAsk() const;
 
@@ -73,6 +86,16 @@ private:
     // Inserts `order` as a new resting order at the back of its price
     // level's FIFO queue, and records its location in index_.
     void rest(const Order& order);
+
+    // Erases the resting order at `loc` from bids_/asks_ (not index_;
+    // callers that are fully removing an order still need to erase it
+    // from index_ themselves). Shared by cancel() and replacePrice().
+    void removeFromBook(const Location& loc);
+
+    // addLimit's actual logic, factored out so replacePrice can reuse it
+    // without re-checking qty/duplicate-id (replacePrice already removed
+    // the old entry under the same id before calling this).
+    const std::vector<Trade>& insertAndMatch(OrderId id, Side side, Price px, Qty qty);
 
     std::map<Price, std::list<Order>, std::greater<Price>> bids_;
     std::map<Price, std::list<Order>> asks_;

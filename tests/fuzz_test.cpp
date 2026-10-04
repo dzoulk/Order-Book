@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <random>
+#include <stdexcept>
 #include <vector>
 
 using namespace orderbook;
@@ -104,7 +105,8 @@ int main() {
                  static_cast<unsigned long long>(seed), opCount);
 
     std::mt19937_64 rng(seed);
-    std::uniform_int_distribution<int> opPicker(1, 100);  // 1-60 limit, 61-90 cancel, 91-100 market
+    // 1-45 limit, 46-65 cancel, 66-80 reduceQty, 81-95 replacePrice, 96-100 market
+    std::uniform_int_distribution<int> opPicker(1, 100);
     std::uniform_int_distribution<Price> pricePicker(kMidPrice - kBand, kMidPrice + kBand);
     std::uniform_int_distribution<Qty> qtyPicker(1, 20);
     std::uniform_int_distribution<int> sidePicker(0, 1);
@@ -120,7 +122,7 @@ int main() {
         int pick = opPicker(rng);
         Side side = sidePicker(rng) == 0 ? Side::Buy : Side::Sell;
 
-        if (pick <= 60) {
+        if (pick <= 45) {
             OrderId id = nextId++;
             Price px = pricePicker(rng);
             Qty qty = qtyPicker(rng);
@@ -134,7 +136,7 @@ int main() {
                              static_cast<unsigned long long>(seed));
                 return 1;
             }
-        } else if (pick <= 90) {
+        } else if (pick <= 65) {
             if (everAdded.empty()) continue;
             // Bias toward recently added orders: more likely still resting,
             // which exercises the true-result path more often than a
@@ -150,6 +152,77 @@ int main() {
                 std::fprintf(stderr,
                              "cancel result mismatch at op %zu (seed=%llu): naive=%d v1=%d v2=%d\n", i,
                              static_cast<unsigned long long>(seed), naiveResult, realResult, fastResult);
+                return 1;
+            }
+        } else if (pick <= 80) {
+            if (everAdded.empty()) continue;
+            std::size_t windowStart = everAdded.size() > 50 ? everAdded.size() - 50 : 0;
+            std::uniform_int_distribution<std::size_t> idxPicker(windowStart, everAdded.size() - 1);
+            OrderId target = everAdded[idxPicker(rng)];
+            Qty newQty = qtyPicker(rng);
+
+            bool naiveThrew = false, realThrew = false, fastThrew = false;
+            bool naiveResult = false, realResult = false, fastResult = false;
+            try {
+                naiveResult = naive.reduceQty(target, newQty);
+            } catch (const std::invalid_argument&) {
+                naiveThrew = true;
+            }
+            try {
+                realResult = real.reduceQty(target, newQty);
+            } catch (const std::invalid_argument&) {
+                realThrew = true;
+            }
+            try {
+                fastResult = fast.reduceQty(target, newQty);
+            } catch (const std::invalid_argument&) {
+                fastThrew = true;
+            }
+
+            if (naiveThrew != realThrew || naiveThrew != fastThrew) {
+                std::fprintf(stderr, "reduceQty throw mismatch at op %zu (seed=%llu)\n", i,
+                             static_cast<unsigned long long>(seed));
+                return 1;
+            }
+            if (!naiveThrew && (naiveResult != realResult || naiveResult != fastResult)) {
+                std::fprintf(stderr, "reduceQty result mismatch at op %zu (seed=%llu)\n", i,
+                             static_cast<unsigned long long>(seed));
+                return 1;
+            }
+        } else if (pick <= 95) {
+            if (everAdded.empty()) continue;
+            std::size_t windowStart = everAdded.size() > 50 ? everAdded.size() - 50 : 0;
+            std::uniform_int_distribution<std::size_t> idxPicker(windowStart, everAdded.size() - 1);
+            OrderId target = everAdded[idxPicker(rng)];
+            Price newPx = pricePicker(rng);
+
+            bool naiveThrew = false, realThrew = false, fastThrew = false;
+            std::vector<Trade> naiveTrades, realTrades, fastTrades;
+            try {
+                naiveTrades = naive.replacePrice(target, newPx);
+            } catch (const std::invalid_argument&) {
+                naiveThrew = true;
+            }
+            try {
+                realTrades = real.replacePrice(target, newPx);
+            } catch (const std::invalid_argument&) {
+                realThrew = true;
+            }
+            try {
+                fastTrades = fast.replacePrice(target, newPx);
+            } catch (const std::invalid_argument&) {
+                fastThrew = true;
+            }
+
+            if (naiveThrew != realThrew || naiveThrew != fastThrew) {
+                std::fprintf(stderr, "replacePrice throw mismatch at op %zu (seed=%llu)\n", i,
+                             static_cast<unsigned long long>(seed));
+                return 1;
+            }
+            if (!naiveThrew && (!tradesMatch(naiveTrades, realTrades, "v1") ||
+                                 !tradesMatch(naiveTrades, fastTrades, "v2"))) {
+                std::fprintf(stderr, "mismatch at op %zu (seed=%llu)\n", i,
+                             static_cast<unsigned long long>(seed));
                 return 1;
             }
         } else {
