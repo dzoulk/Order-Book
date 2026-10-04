@@ -36,6 +36,13 @@ public:
     std::optional<Price> bestAsk() const;
     Qty depthAt(Side side, Price px) const;
 
+    // Current remaining quantity of a resting order, or nullopt if id is
+    // unknown. Lets callers (e.g. the benchmark's flow generator, which
+    // needs to know an order's true current quantity to avoid generating
+    // an invalid reduceQty) query exact state without duplicating this
+    // book's matching logic themselves.
+    std::optional<Qty> restingQty(OrderId id) const;
+
 private:
     // Matches `incoming` against resting_ in place, mutating incoming.qty
     // down as fills happen. Does not insert any unfilled remainder of

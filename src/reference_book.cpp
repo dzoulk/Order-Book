@@ -170,4 +170,11 @@ Qty NaiveOrderBook::depthAt(Side side, Price px) const {
     return total;
 }
 
+std::optional<Qty> NaiveOrderBook::restingQty(OrderId id) const {
+    for (const Order& o : resting_) {
+        if (o.id == id) return o.qty;
+    }
+    return std::nullopt;
+}
+
 } // namespace orderbook

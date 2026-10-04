@@ -66,7 +66,7 @@ int main() {
 
     std::fprintf(stderr, "orderbook profile: generating %zu ops (seed=%llu)...\n", opCount,
                  static_cast<unsigned long long>(seed));
-    std::vector<GeneratedOp> ops = generateOps(opCount, seed);
+    std::vector<GeneratedOp> ops = generateOps(opCount, seed, /*includeModifyOps=*/false);
 
     if (useV2) {
         profile<FastOrderBook>("v2", ops);

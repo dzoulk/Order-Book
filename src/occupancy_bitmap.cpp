@@ -25,7 +25,9 @@ void OccupancyBitmap::set(std::size_t i) {
     for (auto& level : levels_) {
         std::size_t w = idx / 64;
         std::size_t b = idx % 64;
+        bool wordWasNonZero = level[w] != 0;
         level[w] |= (std::uint64_t{1} << b);
+        if (wordWasNonZero) return;  // summary above already reflects this word's occupancy
         idx = w;
     }
 }
