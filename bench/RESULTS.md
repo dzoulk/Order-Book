@@ -1,5 +1,37 @@
 # Benchmark results
 
+## Follow-up: index_ replaced with unordered_dense
+
+The review's last suggested item: `index_` (flagged by profiling as the
+biggest remaining cost in both engines) switched from
+`std::unordered_map` to `ankerl::unordered_dense::map`, a drop-in,
+contiguous-storage hash map. Full story in `docs/DESIGN.md`, including a
+detour where the first wall-clock benchmark after this change showed v1
+getting *slower*, which an isolated A/B test disproved as a real
+regression (reverting to `std::unordered_map` made it slower still), the
+actual cause was session-level thermal throttling after many hours of
+continuous rebuilding, not this code change.
+
+**Trustworthy numbers (perf, percentage of engine time, self-normalizing
+against clock speed, unlike wall-clock ops/sec measured hours apart):**
+
+| | `index_` cost | Allocator overhead |
+|---|---|---|
+| v1, before | ~13.5% | ~17.3% |
+| v1, after | ~3.25% | ~10.75% |
+| v2, before | ~11.7% | ~5% |
+| v2, after | ~3.5% | ~0.04% (essentially eliminated) |
+
+**Wall-clock numbers (6 runs, post-cooldown, still noisier than earlier
+sessions, read as indicative, not precise):** v1 ~14.9M ops/sec, p50
+~86ns, p99 ~255ns, p99.9 ~438ns. v2 ~20.1M ops/sec, p50 ~66ns, p99
+~214ns, p99.9 ~374ns. Both engines moved on every metric relative to the
+"v1/v2 (corrected)" table below, consistent with a session-wide slowdown
+affecting both equally rather than a change specific to one engine.
+Not used as the headline result for this follow-up, the perf percentages
+above are; included here for completeness and because hiding a
+noisy measurement would be worse than labeling it noisy.
+
 ## Follow-up: throughput was still contaminated by clock-call overhead
 
 A review pointed out that reporting clock-call overhead and timing whole

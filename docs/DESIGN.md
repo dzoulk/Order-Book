@@ -423,3 +423,64 @@ cross-cluster transition that test exists to stress.
 Exposed to Python too (`python/bindings.cpp`: `reduce_qty`,
 `replace_price`), same exception-translation behavior as the other
 methods (no custom work needed).
+
+## Follow-up: replacing index_ with unordered_dense
+
+The last item from the review's priority list: profiling had flagged
+`index_` (`std::unordered_map<OrderId, ...>`) as the single biggest
+remaining cost in both engines (~13.5% of v1's engine time originally,
+~11.7% of v2's after the match()-allocation fix), bigger than the
+remaining allocator overhead in each case. `std::unordered_map` is
+node-based: every entry is a separately heap-allocated node, which is
+exactly the kind of cost this whole v2 effort has been about removing.
+
+**Fix:** swapped `index_`'s type to `ankerl::unordered_dense::map` in
+both `OrderBook` and `FastOrderBook` (pulled in via CMake `FetchContent`,
+pinned to v5.3.0, the same pattern already used for GoogleTest and
+pybind11). It's a true drop-in replacement, same method names
+(`find`, `erase`, `operator[]`, `contains`, iteration), so the only code
+change needed was the type declaration in each header. It stores entries
+contiguously in a vector instead of as separate nodes, so there's no
+per-entry allocation.
+
+**Measuring this properly took a detour worth recording.** The first
+wall-clock benchmark after the change showed v1 getting *slower*
+(throughput down from ~16.69M to ~15M ops/sec) alongside v2 staying
+roughly flat, the opposite of what should happen from a change that
+touches both engines' `index_` identically. Before believing that, an
+isolated A/B test reverted just `OrderBook`'s `index_` back to
+`std::unordered_map` (keeping `FastOrderBook` on `unordered_dense`) and
+re-benchmarked: v1 got *even slower* (~11.6-11.9M ops/sec) with the old
+map, not faster. That's the opposite of what a real regression from
+`unordered_dense` would show, which means the wall-clock drop wasn't
+about this code change at all. By this point in the session there had
+been many hours of continuous heavy compilation, sanitizer runs, and
+benchmarking; sustained thermal throttling on laptop hardware is the far
+more likely explanation than a one-line type swap making an unrelated
+code path slower. **Lesson:** wall-clock comparisons taken hours apart in
+a long, CPU-heavy session aren't trustworthy on their own, exactly the
+kind of measurement-hygiene mistake the earlier benchmark-timing fix was
+supposed to guard against, just a different flavor of it (session-level
+drift instead of per-sample instrumentation overhead).
+
+**What's actually trustworthy:** `perf`'s percentage breakdown, since a
+percentage of total time in one profiling run is self-normalizing against
+whatever the CPU's current clock speed happens to be, unlike an absolute
+ops/sec number compared against one measured hours earlier.
+
+| | `index_` cost | Allocator overhead (`malloc`/`new`/etc) |
+|---|---|---|
+| v1, before (`std::unordered_map`) | ~13.5% | ~17.3% |
+| v1, after (`unordered_dense`) | ~3.25% | ~10.75% |
+| v2, before (`std::unordered_map`) | ~11.7% | ~5% |
+| v2, after (`unordered_dense`) | ~3.5% | ~0.04% |
+
+v2's allocator overhead is now essentially eliminated (it was already
+almost all `index_`, since the object pool handles everything else).
+v1's remaining allocator cost is `std::map`/`std::list` node allocations
+for `bids_`/`asks_`, untouched by this change and not in scope, v1 was
+never meant to match v2's allocation profile.
+
+**New dependency:** `ankerl::unordered_dense` (MIT licensed, header-only,
+fetched via CMake same as GoogleTest/pybind11). First third-party runtime
+dependency in this project beyond the test/build tooling.

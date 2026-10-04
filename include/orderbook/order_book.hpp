@@ -2,10 +2,11 @@
 
 #include "orderbook/types.hpp"
 
+#include <ankerl/unordered_dense.h>
+
 #include <list>
 #include <map>
 #include <optional>
-#include <unordered_map>
 #include <vector>
 
 namespace orderbook {
@@ -17,12 +18,16 @@ namespace orderbook {
 //          begin() is always the best (highest) bid.
 //   asks_: std::map<Price, std::list<Order>>.
 //          begin() is always the best (lowest) ask.
-//   index_: std::unordered_map<OrderId, Location> for O(1) cancel. Location
-//           carries the side/price (to find the right map and level) plus a
-//           std::list<Order>::iterator (to erase in O(1) once there). We
-//           use std::list specifically because erasing one element never
-//           invalidates iterators to any other element. A std::vector's
-//           iterators would be invalidated by erasing an unrelated order.
+//   index_: ankerl::unordered_dense::map<OrderId, Location> for O(1)
+//           cancel. Location carries the side/price (to find the right
+//           map and level) plus a std::list<Order>::iterator (to erase
+//           in O(1) once there). We use std::list specifically because
+//           erasing one element never invalidates iterators to any other
+//           element. A std::vector's iterators would be invalidated by
+//           erasing an unrelated order. unordered_dense (not
+//           std::unordered_map) because profiling found node-based maps
+//           allocating a separate node per entry was a real cost; this
+//           stores entries contiguously instead. See docs/DESIGN.md.
 class OrderBook {
 public:
     // Adds a limit order, matching immediately against the opposite side
@@ -99,7 +104,7 @@ private:
 
     std::map<Price, std::list<Order>, std::greater<Price>> bids_;
     std::map<Price, std::list<Order>> asks_;
-    std::unordered_map<OrderId, Location> index_;
+    ankerl::unordered_dense::map<OrderId, Location> index_;
     SeqNum nextSeq_ = 0;
     SeqNum nextTradeSeq_ = 0;
     std::vector<Trade> tradeBuffer_;

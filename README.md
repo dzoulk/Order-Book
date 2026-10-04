@@ -20,12 +20,14 @@ implementation, and a measured (not guessed) v1 → v2 performance story.
   fuzz-test oracle, never as a baseline to beat.
 - **`OrderBook` (v1):** `std::map<Price, std::list<Order>>` per side
   (ascending for asks, `std::greater` for bids so `begin()` is always the
-  best price), plus `std::unordered_map<OrderId, Location>` for cancel.
-  `std::list` specifically because erasing one order never invalidates
-  iterators to any other order, which is what makes O(1) cancel-by-id
-  possible without re-searching. Complexity: `addLimit`/`addMarket`
-  O(log P) to find a price level (P = number of distinct price levels) plus
-  O(1) per fill; `cancel` O(1); `bestBid`/`bestAsk` O(1).
+  best price), plus `ankerl::unordered_dense::map<OrderId, Location>` for
+  cancel (originally `std::unordered_map`, switched after profiling
+  flagged it as a real cost, see Known limitations). `std::list`
+  specifically because erasing one order never invalidates iterators to
+  any other order, which is what makes O(1) cancel-by-id possible
+  without re-searching. Complexity: `addLimit`/`addMarket` O(log P) to
+  find a price level (P = number of distinct price levels) plus O(1) per
+  fill; `cancel` O(1); `bestBid`/`bestAsk` O(1).
 - **`FastOrderBook` (v2):** profiling v1 showed node allocation
   (`std::map`/`std::list`/allocator internals) was the single biggest cost,
   about 21% of engine time. v2 replaces the price-level map with a flat
@@ -123,10 +125,15 @@ latency are measured in separate passes (see Known limitations), and the
 tool reports its own clock-call overhead (~16-24ns per call) alongside
 every run rather than leaving it unstated. v2 is a real but modest win
 (~22% throughput, ~19% p50), consistent with what profiling v1 found:
-node allocation was the biggest cost, v2 removes most of it, but a
-remaining `unordered_map` in both engines' order index wasn't touched in
-this pass. Full per-run numbers, the earlier (since-corrected)
-measurement, and the profiling-to-optimization story are in
+node allocation was the biggest cost, v2 removes most of it. The table
+above predates switching `index_` to `ankerl::unordered_dense::map`
+(both engines' order index was still `std::unordered_map` here); that
+follow-up cut `index_`'s own cost from ~11-13% of engine time to ~3.5%
+in both engines, measured via `perf` percentages rather than wall-clock
+(which got too noisy, in a good-faith, documented way, to trust for this
+specific follow-up, see `docs/DESIGN.md`). Full per-run numbers, the
+earlier (since-corrected) measurement, and the profiling-to-optimization
+story are in
 [bench/RESULTS.md](bench/RESULTS.md) and [docs/DESIGN.md](docs/DESIGN.md).
 
 That table uses the same narrow, clustered price distribution as the fuzz
@@ -172,13 +179,16 @@ full list of what's simplified and why.
   1,000,000) and throws `std::out_of_range` outside that band.
   `OrderBook` and `NaiveOrderBook` have no such restriction. A real
   trade-off for O(1) price-level lookup, not an oversight.
-- **The order index (`unordered_map<OrderId, ...>`) wasn't optimized in
-  v2**, even though profiling flagged it as a real cost. `match()` used
-  to also allocate a fresh `std::vector<Trade>` every call (fixed, both
-  engines now reuse an internal buffer); with that gone, profiling
-  `FastOrderBook` directly shows `index_` at ~11.7% of engine time, more
-  than double the remaining allocator overhead (~5%). The clearest v3
-  candidate, not in scope here.
+- **Resolved: the order index was `std::unordered_map`, profiling's
+  clearest remaining cost (~11-13.5% of engine time, more than the
+  allocator overhead left over after the other fixes).** Switched both
+  engines to `ankerl::unordered_dense::map` (contiguous storage, no
+  per-entry node allocation), a drop-in replacement, no logic changes.
+  Cut `index_`'s own cost to ~3.5% in both engines. Measured via `perf`
+  percentages, not wall-clock, after a wall-clock comparison this session
+  turned out to be too noisy (likely thermal throttling after many hours
+  of continuous builds) to trust, see `docs/DESIGN.md` for the full
+  methodology detour.
 - **The differential fuzz test's cost scales roughly quadratically with op
   count**, not linearly, because the naive reference's resting-order count
   grows over a long run and its state check is O(n). Deliberate, since the

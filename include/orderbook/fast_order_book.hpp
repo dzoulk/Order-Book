@@ -3,9 +3,10 @@
 #include "orderbook/occupancy_bitmap.hpp"
 #include "orderbook/types.hpp"
 
+#include <ankerl/unordered_dense.h>
+
 #include <cstdint>
 #include <optional>
-#include <unordered_map>
 #include <vector>
 
 namespace orderbook {
@@ -127,7 +128,11 @@ private:
     std::vector<PoolNode> pool_;
     PoolIndex freeListHead_ = kInvalidIndex;
 
-    std::unordered_map<OrderId, PoolIndex> index_;
+    // ankerl::unordered_dense::map, not std::unordered_map: profiling
+    // found index_ costing ~13.5-11.7% of engine time, node-based maps
+    // allocate a separate node per entry; this stores entries
+    // contiguously instead. See docs/DESIGN.md for the before/after.
+    ankerl::unordered_dense::map<OrderId, PoolIndex> index_;
     SeqNum nextSeq_ = 0;
     SeqNum nextTradeSeq_ = 0;
     std::vector<Trade> tradeBuffer_;
