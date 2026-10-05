@@ -101,6 +101,18 @@ ambiguity between "not found" and "found but nothing happened". A
 deliberate simplification: a production system would need to handle
 the race condition explicitly.
 
+## Real market data replay
+
+`tools/orderbook_itch_replay` parses NASDAQ ITCH 5.0 (`tools/itch/`) and
+replays one symbol's real order flow for a day through both engines.
+ITCH's Executed/Cancel messages map to `reduceQty`/`cancel` rather than a
+synthesized counterparty order (ITCH only publishes matching's outcome,
+never a replayable aggressive order); a fixed price band filters the
+small fraction of real orders placed at extreme marketable-limit prices,
+the same idea as a real exchange's price-collar gateway check. See
+[tools/README.md](../tools/README.md) for usage and HISTORY.md for the
+full design rationale.
+
 ## Toolchain
 
 WSL2 Ubuntu 26.04: `build-essential clang cmake ninja-build gdb

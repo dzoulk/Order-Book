@@ -16,6 +16,8 @@ broke, what was measured, and why. For the design as it stands today, see
 - [x] 7 (stretch). pybind11 bindings + Gymnasium environment
 - [x] 8. External code review: five issues found and fixed (see "Bugs
       found and fixed" below), plus a second round of polish
+- [x] 9. Real market data replay: NASDAQ ITCH 5.0 parser, both engines
+      benchmarked against real order flow instead of only synthetic
 
 ## Toolchain
 
@@ -101,6 +103,66 @@ out. Verified against `gymnasium.utils.env_checker.check_env`. Explicitly
 scaffolding, not a tuned RL problem: fixed-length episodes, a 3-action
 space, no adverse-selection modeling, no risk-aversion term beyond a
 quadratic inventory penalty.
+
+## Real market data replay
+
+A synthetic benchmark, however carefully generated, invites a fair
+question: does it just happen to flatter the engine being measured?
+`tools/orderbook_itch_replay` answers that with real order flow instead
+of an argument. It parses NASDAQ ITCH 5.0, NASDAQ's own binary protocol
+for publishing full order-book activity, and replays one trading day's
+messages for a chosen symbol through both engines.
+
+**Protocol shape:** a flat stream of `[2-byte big-endian length][message
+body]` records (`tools/itch/itch_reader.cpp`), each body a 1-byte message
+type followed by big-endian fields. A Stock Directory message ('R') is
+emitted once per listed symbol near the start of the day, mapping a
+locate code to a ticker; every other message type that matters here
+carries a locate code instead of the ticker text, so finding one
+symbol's flow is a two-pass job: scan once for the directory, then scan
+again filtering by that symbol's locate code.
+
+**Mapping ITCH to engine operations is not 1:1, documented in
+`itch_replay_main.cpp`'s header comment rather than glossed over.**
+ITCH's TotalView-style feed only publishes the *outcome* of matching: an
+Executed message says a resting order's quantity shrank by some amount,
+never a replayable incoming order for the other side of that trade.
+There is no way to reconstruct a fictitious counterparty order from this
+feed alone. 'E'/'C' (Executed) and 'X' (Cancel, partial) map to
+`reduceQty` (or `cancel` if the remaining quantity hits zero); 'D'
+(Delete) maps to `cancel`; 'A'/'F' (Add) maps to `addLimit`; 'U'
+(Replace) maps to `cancel` of the old reference plus `addLimit` of the
+new one, rather than this project's own `replacePrice`, because ITCH's
+Replace can change both price and quantity and always assigns a new
+order reference, which doesn't fit `replacePrice`'s same-id,
+price-only contract. This reproduces the real quantity-decrease and
+arrival pattern on the resting side, the same price/size/timing
+distributions as the real market, without pretending the engine
+discovered a trade it has no data to reconstruct.
+
+**First run crashed:** `FastOrderBook::addLimit: price out of supported
+band`. A Python pass over the raw file explained why: real AAPL order
+flow includes a small fraction of orders at deliberately extreme prices,
+up to $199,999.99, effectively marketable limits meant to guarantee a
+fill rather than real price discovery, far outside `kMaxPrice`. Real
+exchanges reject orders like this at a price-collar gateway check before
+they ever reach matching. Percentile analysis of the same sample (p0.1%
+= $1, median = $162.18, p99% = $245, p99.9% = $310) picked a $50-$500
+band that keeps 99.71% of real orders; `itch_replay_main.cpp` filters
+anything outside it the same way a real gateway would, and reports how
+many ops it dropped for that reason on every run (278 of 171,128 in the
+AAPL sample used for the numbers below).
+
+**Result**, one trading day's AAPL flow (170,839 ops after filtering:
+103,592 add, 63,792 cancel, 3,455 reduceQty):
+
+| | Throughput |
+|---|---|
+| v1 (`std::map`/`std::list`) | ~15M ops/sec |
+| v2 (flat array, intrusive list, object pool) | ~34M ops/sec |
+
+The same roughly 2.2x v2 advantage the synthetic benchmark shows, now on
+flow this project didn't generate.
 
 ## Bugs found and fixed
 

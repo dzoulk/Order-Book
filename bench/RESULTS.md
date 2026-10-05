@@ -21,6 +21,12 @@ v2 ~54ns per add+cancel, both fast, neither pathological. Independently
 re-verified on different hardware: 104ns (v2) vs 146ns (v1), v2 now
 faster than v1 on its own former worst case.
 
+Real NASDAQ ITCH 5.0 AAPL flow (`orderbook_itch_replay`, 170,839 real
+ops, see `docs/HISTORY.md` for the protocol mapping and the price-band
+filter this needed): v1 ~15M ops/sec, v2 ~34M ops/sec, roughly the same
+~2.2x v2 advantage as the synthetic benchmark above, now on flow this
+project didn't generate.
+
 ## index_ replaced with unordered_dense
 
 `index_` (flagged by profiling as the biggest remaining cost in both

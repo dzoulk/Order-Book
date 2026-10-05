@@ -8,6 +8,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(ORDERBOOK_BUILD_TESTS "Build unit tests" ON)
 option(ORDERBOOK_BUILD_BENCH "Build benchmark harness" ON)
 option(ORDERBOOK_BUILD_PYTHON "Build Python bindings (requires pybind11)" OFF)
+option(ORDERBOOK_BUILD_TOOLS "Build the ITCH replay tool (needs no extra deps; the sample data isn't checked in, see tools/README.md)" OFF)
 
 add_subdirectory(src)
 
@@ -22,4 +23,8 @@ endif()
 
 if(ORDERBOOK_BUILD_PYTHON)
     add_subdirectory(python)
+endif()
+
+if(ORDERBOOK_BUILD_TOOLS)
+    add_subdirectory(tools)
 endif()

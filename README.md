@@ -91,6 +91,24 @@ historical number.
 `./build/release/bench/orderbook_sparse_bench` is a dedicated regression
 benchmark for the sparse-book scenario below.
 
+## Real market data replay
+
+`tools/orderbook_itch_replay` replays real NASDAQ ITCH 5.0 order flow (not
+synthetic) through both engines, as a check against the risk that a
+hand-written generator's op mix happens to flatter one engine. On one
+trading day's AAPL flow (170,839 ops):
+
+| | Throughput |
+|---|---|
+| v1 (`std::map`/`std::list`) | ~15M ops/sec |
+| v2 (flat array, intrusive list, object pool) | ~34M ops/sec |
+
+Same ~2.2x v2 advantage as the synthetic benchmark above, on flow this
+project didn't generate. See [tools/README.md](tools/README.md) for how
+to get sample data and run it yourself, and
+[docs/HISTORY.md](docs/HISTORY.md) for how ITCH's one-sided feed maps
+onto this engine's two-sided API.
+
 ## Python bindings and RL environment (stretch goal)
 
 ```
@@ -182,7 +200,8 @@ writeups in [docs/HISTORY.md](docs/HISTORY.md).
 - `bench/`: throughput/latency harness, generates its own synthetic order
   flow internally (see `bench/RESULTS.md` for numbers), plus a dedicated
   sparse-book regression benchmark
-- `tools/`: optional LOBSTER sample-data loader, not yet built
+- `tools/`: `orderbook_itch_replay`, replays real NASDAQ ITCH 5.0 order
+  flow through both engines (see [tools/README.md](tools/README.md))
 - `docs/`: [DESIGN.md](docs/DESIGN.md) (current design) and
   [HISTORY.md](docs/HISTORY.md) (how it got here, bugs found and fixed,
   every historical measurement)

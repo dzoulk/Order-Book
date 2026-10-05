@@ -42,6 +42,16 @@
       }
     },
     {
+      "name": "tools",
+      "displayName": "Tools (Release + ITCH replay, needs sample data, see tools/README.md)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/tools",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ORDERBOOK_BUILD_TOOLS": "ON"
+      }
+    },
+    {
       "name": "sanitize",
       "displayName": "Sanitizer (ASan + UBSan, Linux/GCC or Clang only)",
       "generator": "Ninja",
@@ -63,6 +73,7 @@
     { "name": "release", "configurePreset": "release" },
     { "name": "profile", "configurePreset": "profile" },
     { "name": "python", "configurePreset": "python" },
+    { "name": "tools", "configurePreset": "tools" },
     { "name": "sanitize", "configurePreset": "sanitize" }
   ],
   "testPresets": [

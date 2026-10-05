@@ -10,3 +10,4 @@ CMakeUserPresets.json
 .vs/
 .vscode/
 *.user
+tools/itch_data/
