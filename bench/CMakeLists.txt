@@ -6,3 +6,8 @@ target_link_libraries(orderbook_profile PRIVATE orderbook_core)
 
 add_executable(orderbook_sparse_bench sparse_bench_main.cpp)
 target_link_libraries(orderbook_sparse_bench PRIVATE orderbook_core)
+
+find_package(Threads REQUIRED)
+
+add_executable(orderbook_concurrency_bench concurrency_bench_main.cpp)
+target_link_libraries(orderbook_concurrency_bench PRIVATE orderbook_core Threads::Threads)

@@ -113,6 +113,29 @@ the same idea as a real exchange's price-collar gateway check. See
 [tools/README.md](../tools/README.md) for usage and HISTORY.md for the
 full design rationale.
 
+## Concurrency: SpscQueue
+
+`include/orderbook/spsc_queue.hpp`: a lock-free, fixed-capacity,
+single-producer/single-consumer ring buffer. Bounded, `tryPush` fails
+rather than blocking or growing when full. `head_`/`tail_` are each
+written by exactly one thread and read by the other, each padded to its
+own cache line along with the other side's plain (non-atomic) cached
+copy of the far index, so a cache-only field touched by one thread never
+shares a line with an atomic the other thread polls. Verified race-free
+under ThreadSanitizer up to 2,000,000 messages, and correct (every
+message delivered exactly once, in order) under a real two-thread
+stress test in `tests/spsc_queue_test.cpp`.
+
+`bench/orderbook_concurrency_bench` puts this queue between a gateway
+thread and a matching thread owning `FastOrderBook`, measuring
+end-to-end latency instead of calling the book directly in-process. It
+picks two logical CPUs on different physical cores to pin the two
+threads to (reading `/sys/devices/system/cpu/*/topology/core_id` rather
+than assuming adjacent CPU numbers are distinct cores), and runs the
+same op stream through both a shallow and a deep queue to show how
+latency scales with queue depth under a saturated producer. See
+HISTORY.md for why both of those turned out to matter.
+
 ## Toolchain
 
 WSL2 Ubuntu 26.04: `build-essential clang cmake ninja-build gdb

@@ -109,6 +109,31 @@ to get sample data and run it yourself, and
 [docs/HISTORY.md](docs/HISTORY.md) for how ITCH's one-sided feed maps
 onto this engine's two-sided API.
 
+## Concurrency: gateway thread to matching thread
+
+`bench/orderbook_concurrency_bench` puts a lock-free SPSC ring buffer
+(`include/orderbook/spsc_queue.hpp`) between a gateway thread and a
+matching thread owning `FastOrderBook`, instead of calling the book
+directly in-process, and measures end-to-end latency across that
+handoff. Verified race-free under ThreadSanitizer. Measured on the same
+machine as the Results table above, same op stream, same process,
+pinned to two distinct physical cores:
+
+| | Throughput | p50 | p99 |
+|---|---|---|---|
+| single-threaded, in-process | ~26M ops/sec | ~49ns | ~150ns |
+| pipelined, shallow queue (64) | ~8M ops/sec | ~7µs | ~14µs |
+| pipelined, deep queue (4096) | ~8M ops/sec | ~440µs | ~700µs |
+
+The gateway sends flat-out, no delay between messages, so the queue
+runs saturated; under saturation a bounded SPSC queue settles "mostly
+full," and by Little's Law every item then waits roughly (queue depth /
+consumer rate), which is why p50 scales with queue depth almost exactly
+linearly above, not a fixed handoff cost. See
+[docs/HISTORY.md](docs/HISTORY.md) for the full story, including a
+hyperthread-sibling pinning mistake that made these numbers 6x worse
+before it was caught.
+
 ## Python bindings and RL environment (stretch goal)
 
 ```
@@ -194,12 +219,13 @@ writeups in [docs/HISTORY.md](docs/HISTORY.md).
 
 ## Layout
 
-- `include/orderbook/`: public headers (`types.hpp`, `order_book.hpp`, `fast_order_book.hpp`, `occupancy_bitmap.hpp`, `reference_book.hpp`)
+- `include/orderbook/`: public headers (`types.hpp`, `order_book.hpp`, `fast_order_book.hpp`, `occupancy_bitmap.hpp`, `reference_book.hpp`, `spsc_queue.hpp`)
 - `src/`: implementation
 - `tests/`: GoogleTest unit tests, plus two differential fuzz tests (narrow-band and sparse)
 - `bench/`: throughput/latency harness, generates its own synthetic order
-  flow internally (see `bench/RESULTS.md` for numbers), plus a dedicated
-  sparse-book regression benchmark
+  flow internally (see `bench/RESULTS.md` for numbers), a dedicated
+  sparse-book regression benchmark, and the gateway/matching concurrency
+  benchmark
 - `tools/`: `orderbook_itch_replay`, replays real NASDAQ ITCH 5.0 order
   flow through both engines (see [tools/README.md](tools/README.md))
 - `docs/`: [DESIGN.md](docs/DESIGN.md) (current design) and

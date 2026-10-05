@@ -7,14 +7,18 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
+find_package(Threads REQUIRED)
+
 add_executable(orderbook_tests
     book_test.cpp
     occupancy_bitmap_test.cpp
+    spsc_queue_test.cpp
 )
 
 target_link_libraries(orderbook_tests PRIVATE
     orderbook_core
     GTest::gtest_main
+    Threads::Threads
 )
 
 include(GoogleTest)

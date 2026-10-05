@@ -27,6 +27,15 @@ filter this needed): v1 ~15M ops/sec, v2 ~34M ops/sec, roughly the same
 ~2.2x v2 advantage as the synthetic benchmark above, now on flow this
 project didn't generate.
 
+Concurrency (`orderbook_concurrency_bench`, gateway thread -> lock-free
+SPSC queue -> matching thread, pinned to two distinct physical cores,
+see `docs/HISTORY.md` for the full story including a hyperthread-sibling
+pinning mistake and the Little's Law queue-depth analysis): throughput
+drops from ~26M ops/sec single-threaded to ~8M ops/sec pipelined; p50
+latency ~7µs at queue depth 64 versus ~440µs at queue depth 4096, a
+saturated bounded queue's latency scaling almost exactly linearly with
+depth, not a fixed handoff cost.
+
 ## index_ replaced with unordered_dense
 
 `index_` (flagged by profiling as the biggest remaining cost in both

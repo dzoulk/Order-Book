@@ -18,6 +18,8 @@ broke, what was measured, and why. For the design as it stands today, see
       found and fixed" below), plus a second round of polish
 - [x] 9. Real market data replay: NASDAQ ITCH 5.0 parser, both engines
       benchmarked against real order flow instead of only synthetic
+- [x] 10. Concurrency: lock-free SPSC queue between a gateway thread and
+       the matching thread, end-to-end latency measured and explained
 
 ## Toolchain
 
@@ -163,6 +165,101 @@ AAPL sample used for the numbers below).
 
 The same roughly 2.2x v2 advantage the synthetic benchmark shows, now on
 flow this project didn't generate.
+
+## Concurrency: a gateway thread, a matching thread, and two real lessons
+
+Every benchmark so far calls the engine directly, in the same thread
+that generates the op. A real system doesn't: a gateway thread receives
+orders and hands them to the thread that owns the book. `SpscQueue`
+(`include/orderbook/spsc_queue.hpp`) is a lock-free, fixed-capacity,
+single-producer/single-consumer ring buffer for that handoff, and
+`bench/orderbook_concurrency_bench` measures the end-to-end latency
+across it: gateway timestamps an order, matching thread applies it,
+delta is the sample.
+
+**Correctness first.** `tests/spsc_queue_test.cpp` runs a real two-thread
+stress test (1,000,000 items, producer spinning on `tryPush`, consumer
+spinning on `tryPop`), checking every item arrives exactly once, in
+order. Passes under the project's existing ASan/UBSan `sanitize` preset.
+Neither of those catches a data race, so the queue was also compiled
+and run standalone under ThreadSanitizer (not part of the committed
+`sanitize` preset, which combines ASan+UBSan, incompatible with TSan in
+the same binary): clean on 2,000,000 messages.
+
+**First latency numbers looked absurd.** A naive version of this
+benchmark, both threads just spinning, no CPU pinning, reported p50
+latencies in the hundreds of microseconds, sometimes over a millisecond,
+for a queue that TSan had just proven correct and nanoseconds-cheap in
+isolation. Two separate things turned out to be true at once, found by
+isolating each with a minimal standalone repro before touching the real
+benchmark.
+
+**Lesson 1: thread placement matters more than expected.** This
+project's development machine is a hybrid P-core/E-core laptop CPU.
+`lscpu -e` shows CPU 0 and CPU 1 sharing physical core 0; they're
+hyperthread siblings, not independent cores. A minimal repro (just the
+queue, no engine, pinned with `taskset`/`pthread_setaffinity_np`) showed
+p50 around 128,000ns when pinned to CPUs 0 and 1, and around 19,500ns,
+about 6.5x better, when pinned to CPUs 0 and 2 (genuinely distinct
+physical cores) instead. Same code, same machine, only the two CPU
+indices changed. `pickTwoCpusOnDistinctCores()` in
+`concurrency_bench_main.cpp` now reads
+`/sys/devices/system/cpu/cpu*/topology/core_id` and picks two CPUs on
+different cores automatically, rather than assuming adjacent CPU numbers
+are distinct cores, or requiring the person running it to know their own
+machine's topology.
+
+**Lesson 2: a saturated bounded queue's latency is dominated by queue
+depth, not handoff cost.** Even pinned correctly, a trivial atomic
+ping-pong between two threads measured about 124ns round trip on this
+same machine, nanoseconds, not microseconds, proving raw cross-core
+signaling here is fast. So where did the queue's remaining latency come
+from? The benchmark's gateway sends flat-out, with no delay between
+messages (deliberately: a saturated gateway is the harder, more
+realistic case under real load). When the producer's rate is at or
+above the consumer's, a bounded queue doesn't stay mostly empty, it
+fills up and stays "mostly full." By Little's Law, every item then waits
+roughly (queue depth / consumer service rate) before being popped,
+regardless of how fast the underlying hardware is. Measured directly:
+
+| Queue capacity | p50 latency |
+|---|---|
+| 64 | ~7,000ns |
+| 4,096 | ~440,000ns |
+
+64x the capacity, about 64x the latency, matching the Little's Law
+prediction almost exactly (a per-item consumer service time of roughly
+100-110ns times either depth lands within a few percent of both
+measured p50s). Not a bug, not environment noise, an inherent property
+of any bounded queue once arrivals outpace service, and the real
+throughput/latency tradeoff a queue-depth config knob makes in an actual
+gateway: a deeper queue absorbs bigger bursts without the producer
+blocking, at the cost of higher latency for everything sitting behind
+the backlog during a sustained burst. `concurrency_bench_main.cpp` runs
+both a shallow (64) and deep (4096) queue through the identical op
+stream specifically to make this relationship visible in one run,
+instead of a single number that invites the question "compared to
+what?"
+
+**Result, pinned to two distinct physical cores, same op stream as the
+single-threaded baseline measured immediately before in the same
+process:**
+
+| | Throughput | p50 | p99 |
+|---|---|---|---|
+| single-threaded, in-process | ~26M ops/sec | ~49ns | ~150ns |
+| pipelined, shallow queue (64) | ~8M ops/sec | ~7µs | ~14µs |
+| pipelined, deep queue (4096) | ~8M ops/sec | ~440µs | ~700µs |
+
+Throughput drops from ~26M to ~8M ops/sec once the engine moves to its
+own thread behind a queue: cross-core cache-coherency traffic on the
+queue's `head_`/`tail_` atomics, and contention for shared cache/memory
+bandwidth between the two spinning threads, both real costs of this
+design that a single-threaded benchmark can't show. Consistent with
+this project's standing WSL2 caveat (not bare-metal), but the
+within-this-run shallow-vs-deep comparison above is the trustworthy
+part regardless of that caveat, same hardware and same virtualization
+overhead apply equally to both rows.
 
 ## Bugs found and fixed
 
