@@ -21,20 +21,29 @@ v2 ~54ns per add+cancel, both fast, neither pathological. Independently
 re-verified on different hardware: 104ns (v2) vs 146ns (v1), v2 now
 faster than v1 on its own former worst case.
 
-Real NASDAQ ITCH 5.0 AAPL flow (`orderbook_itch_replay`, 170,839 real
-ops, see `docs/HISTORY.md` for the protocol mapping and the price-band
-filter this needed): v1 ~15M ops/sec, v2 ~34M ops/sec, roughly the same
-~2.2x v2 advantage as the synthetic benchmark above, now on flow this
-project didn't generate.
+Real NASDAQ ITCH 5.0 AAPL flow, a partial-day sample
+(`orderbook_itch_replay`, 170,839 real ops, see `docs/HISTORY.md` for
+the protocol mapping and the price-band filter this needed): v1 ~15M
+ops/sec, v2 ~34M ops/sec, a bigger v2 advantage (~2.3x) than the
+synthetic benchmark above (~1.4x), consistent with this real sample
+touching ~20x more distinct price levels (5,517 vs 273), which costs
+v1's O(log P) `std::map` lookup more and costs v2's O(1) design
+nothing.
 
 Concurrency (`orderbook_concurrency_bench`, gateway thread -> lock-free
 SPSC queue -> matching thread, pinned to two distinct physical cores,
 see `docs/HISTORY.md` for the full story including a hyperthread-sibling
-pinning mistake and the Little's Law queue-depth analysis): throughput
-drops from ~26M ops/sec single-threaded to ~8M ops/sec pipelined; p50
-latency ~7µs at queue depth 64 versus ~440µs at queue depth 4096, a
-saturated bounded queue's latency scaling almost exactly linearly with
-depth, not a fixed handoff cost.
+pinning mistake): saturated (gateway sends flat-out), p50 scales almost
+exactly linearly with queue depth, ~7µs at depth 64 vs ~440µs at depth
+4096, a bounded queue's Little's Law behavior under sustained overload,
+not a fixed handoff cost; a batched variant (one atomic store per batch
+of 64 instead of per message) recovers a real chunk of the saturated
+throughput drop (~26M single-threaded down to ~6-7M unbatched pipelined,
+~9-10M batched). Paced at a fixed offered load well under capacity
+instead (1M/4M/7M msgs/sec) isolates the true cross-core handoff cost:
+p50 ~260-375ns at 1M and 4M (comfortably sustained), jumping back to
+saturated-queue latency at 7M once the matching thread's real capacity
+is exceeded and the queue starts backing up.
 
 ## index_ replaced with unordered_dense
 

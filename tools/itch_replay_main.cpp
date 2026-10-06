@@ -2,9 +2,9 @@
 // through OrderBook and FastOrderBook, instead of synthetic generated
 // flow. See tools/README.md for how to get sample data; see
 // docs/HISTORY.md for why this exists (a synthetic-only benchmark
-// "invites skepticism", per an external code review) and what doesn't
-// map cleanly between ITCH's protocol and this engine's API (documented
-// below, not glossed over).
+// invites the question of whether it just happens to flatter the
+// engine being measured) and what doesn't map cleanly between ITCH's
+// protocol and this engine's API (documented below, not glossed over).
 //
 // ITCH message to engine operation mapping:
 //   'A'/'F' Add Order            -> addLimit

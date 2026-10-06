@@ -3,9 +3,10 @@
 A single-instrument limit order book and matching engine in C++20. Built
 v1 with `std::map`/`std::list`, profiled it, and built a faster v2 (flat
 array, intrusive list, object pool, a hierarchical bitmap for O(1)
-best-price lookup). An external code review then caught a real O(price
-range) bug in v2's "O(1)" claim on a sparse book; it's fixed, verified,
-and has permanent regression coverage, see "Bugs found and fixed" below.
+best-price lookup). Verified against real NASDAQ order flow and a
+lock-free concurrent gateway/matching pipeline, not just synthetic,
+single-threaded benchmarks; see "Issues found and fixed" below for what
+broke along the way and how it was caught.
 
 ## Results
 
@@ -95,19 +96,23 @@ benchmark for the sparse-book scenario below.
 
 `tools/orderbook_itch_replay` replays real NASDAQ ITCH 5.0 order flow (not
 synthetic) through both engines, as a check against the risk that a
-hand-written generator's op mix happens to flatter one engine. On one
-trading day's AAPL flow (170,839 ops):
+hand-written generator's op mix happens to flatter one engine. On a
+partial-day sample of real AAPL flow (170,839 ops):
 
 | | Throughput |
 |---|---|
 | v1 (`std::map`/`std::list`) | ~15M ops/sec |
 | v2 (flat array, intrusive list, object pool) | ~34M ops/sec |
 
-Same ~2.2x v2 advantage as the synthetic benchmark above, on flow this
-project didn't generate. See [tools/README.md](tools/README.md) for how
-to get sample data and run it yourself, and
-[docs/HISTORY.md](docs/HISTORY.md) for how ITCH's one-sided feed maps
-onto this engine's two-sided API.
+v2's advantage is bigger here (~2.3x) than on the synthetic benchmark
+above (~1.4x). Likely why: this real sample touches 5,517 distinct
+price levels versus the synthetic generator's 273, and v1's `std::map`
+lookup costs more as distinct price levels grow (O(log P)) while v2's
+flat-array-plus-bitmap design doesn't (O(1) regardless of P). See
+[docs/HISTORY.md](docs/HISTORY.md) for the full comparison, how ITCH's
+one-sided feed maps onto this engine's two-sided API, and
+[tools/README.md](tools/README.md) for how to get sample data and run
+it yourself.
 
 ## Concurrency: gateway thread to matching thread
 
@@ -119,20 +124,37 @@ handoff. Verified race-free under ThreadSanitizer. Measured on the same
 machine as the Results table above, same op stream, same process,
 pinned to two distinct physical cores:
 
-| | Throughput | p50 | p99 |
-|---|---|---|---|
-| single-threaded, in-process | ~26M ops/sec | ~49ns | ~150ns |
-| pipelined, shallow queue (64) | ~8M ops/sec | ~7µs | ~14µs |
-| pipelined, deep queue (4096) | ~8M ops/sec | ~440µs | ~700µs |
+Saturated (gateway sends flat-out, no delay between messages), p50
+scales almost exactly linearly with queue depth, a bounded queue's
+Little's Law behavior under sustained overload, not a fixed handoff
+cost:
 
-The gateway sends flat-out, no delay between messages, so the queue
-runs saturated; under saturation a bounded SPSC queue settles "mostly
-full," and by Little's Law every item then waits roughly (queue depth /
-consumer rate), which is why p50 scales with queue depth almost exactly
-linearly above, not a fixed handoff cost. See
-[docs/HISTORY.md](docs/HISTORY.md) for the full story, including a
-hyperthread-sibling pinning mistake that made these numbers 6x worse
-before it was caught.
+| | Throughput | p50 |
+|---|---|---|
+| single-threaded, in-process | ~26M ops/sec | ~49ns |
+| pipelined, shallow queue (64) | ~8M ops/sec | ~7µs |
+| pipelined, deep queue (4096) | ~8M ops/sec | ~440µs |
+| pipelined, deep queue, batched (64) | ~9-10M ops/sec | ~330-370µs |
+
+Paced at a fixed offered load well under capacity instead, isolating
+the true cross-core handoff cost from queueing delay:
+
+| Offered load | p50 |
+|---|---|
+| 1,000,000/sec | ~260-280ns |
+| 4,000,000/sec | ~260-375ns |
+| 7,000,000/sec (exceeds capacity) | ~440-640µs |
+
+The true handoff cost is a few hundred nanoseconds, not microseconds;
+the saturated numbers above measure queueing delay once offered load
+reaches the matching thread's real capacity (around 6-10M ops/sec
+here), not handoff cost. The batch API (`tryPushBatch`/`tryPopBatch`,
+one atomic store per batch instead of per message) recovers a real
+chunk of the saturated throughput gap, confirming per-message
+cross-core traffic as a genuine contributor, though not the only one.
+See [docs/HISTORY.md](docs/HISTORY.md) for the full story, including a
+hyperthread-sibling pinning mistake that made the saturated numbers 6x
+worse before it was caught.
 
 ## Python bindings and RL environment (stretch goal)
 
@@ -150,12 +172,14 @@ scaffolding for a future market-making RL agent, verified against
 Gymnasium's own `check_env`. Deliberately not a tuned RL problem; see
 [docs/HISTORY.md](docs/HISTORY.md) for what's simplified and why.
 
-## Bugs found and fixed
+## Issues found and fixed
 
-An external code review of the finished project caught four real issues.
-Each is fixed, verified with measured before/after numbers, and has
-permanent regression coverage so it can't quietly come back. Full
-writeups in [docs/HISTORY.md](docs/HISTORY.md).
+Four real issues surfaced during development, three found through this
+project's own profiling and benchmark-methodology scrutiny, one (the
+sparse-book case below) caught by an external code review and
+reproduced here. Each is fixed, verified with measured before/after
+numbers, and has permanent regression coverage so it can't quietly come
+back. Full writeups in [docs/HISTORY.md](docs/HISTORY.md).
 
 - **v2 was O(price range) on a sparse book, not O(1).** `bestBid`/
   `bestAsk` finding the next occupied price level used to be a linear
@@ -229,8 +253,8 @@ writeups in [docs/HISTORY.md](docs/HISTORY.md).
 - `tools/`: `orderbook_itch_replay`, replays real NASDAQ ITCH 5.0 order
   flow through both engines (see [tools/README.md](tools/README.md))
 - `docs/`: [DESIGN.md](docs/DESIGN.md) (current design) and
-  [HISTORY.md](docs/HISTORY.md) (how it got here, bugs found and fixed,
-  every historical measurement)
+  [HISTORY.md](docs/HISTORY.md) (how it got here, issues found and
+  fixed, every historical measurement)
 - `python/`: pybind11 bindings (`bindings.cpp`) and a Gymnasium
   environment (`orderbook_gym/`), stretch goal
 
@@ -238,8 +262,8 @@ writeups in [docs/HISTORY.md](docs/HISTORY.md).
 
 All planned milestones and the stretch goal are done: a working v1
 (`OrderBook`), a profiled-and-optimized v2 (`FastOrderBook`), differential
-fuzz tests and sanitizers, a benchmark harness, Python bindings with a
-Gymnasium environment, and a full round of fixes from an external code
-review (above). See [docs/DESIGN.md](docs/DESIGN.md) for the system as it
-stands today, or [docs/HISTORY.md](docs/HISTORY.md) for the complete
-story.
+fuzz tests and sanitizers, a benchmark harness, real market data replay,
+a lock-free concurrency benchmark, Python bindings with a Gymnasium
+environment, and a round of correctness and performance fixes (above).
+See [docs/DESIGN.md](docs/DESIGN.md) for the system as it stands today,
+or [docs/HISTORY.md](docs/HISTORY.md) for the complete story.

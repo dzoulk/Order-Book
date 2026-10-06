@@ -14,8 +14,9 @@ broke, what was measured, and why. For the design as it stands today, see
 - [x] 5. Profile, v2 optimizations, v1 vs v2 results
 - [x] 6. README polish
 - [x] 7 (stretch). pybind11 bindings + Gymnasium environment
-- [x] 8. External code review: five issues found and fixed (see "Bugs
-      found and fixed" below), plus a second round of polish
+- [x] 8. Four issues found and fixed, one via external code review,
+      three via profiling (see "Issues found and fixed" below), plus a
+      second round of review and polish
 - [x] 9. Real market data replay: NASDAQ ITCH 5.0 parser, both engines
       benchmarked against real order flow instead of only synthetic
 - [x] 10. Concurrency: lock-free SPSC queue between a gateway thread and
@@ -112,8 +113,11 @@ A synthetic benchmark, however carefully generated, invites a fair
 question: does it just happen to flatter the engine being measured?
 `tools/orderbook_itch_replay` answers that with real order flow instead
 of an argument. It parses NASDAQ ITCH 5.0, NASDAQ's own binary protocol
-for publishing full order-book activity, and replays one trading day's
-messages for a chosen symbol through both engines.
+for publishing full order-book activity, and replays a partial-day
+sample of messages for a chosen symbol through both engines (see
+`tools/README.md`: getting a full day's file means downloading several
+gigabytes, so the numbers below come from a `curl -r` range request
+against a prefix of one, not the whole trading day).
 
 **Protocol shape:** a flat stream of `[2-byte big-endian length][message
 body]` records (`tools/itch/itch_reader.cpp`), each body a 1-byte message
@@ -155,18 +159,36 @@ anything outside it the same way a real gateway would, and reports how
 many ops it dropped for that reason on every run (278 of 171,128 in the
 AAPL sample used for the numbers below).
 
-**Result**, one trading day's AAPL flow (170,839 ops after filtering:
-103,592 add, 63,792 cancel, 3,455 reduceQty):
+**Result**, on this partial-day sample of real AAPL flow (170,839 ops
+after filtering: 103,592 add, 63,792 cancel, 3,455 reduceQty):
 
 | | Throughput |
 |---|---|
 | v1 (`std::map`/`std::list`) | ~15M ops/sec |
 | v2 (flat array, intrusive list, object pool) | ~34M ops/sec |
 
-The same roughly 2.2x v2 advantage the synthetic benchmark shows, now on
-flow this project didn't generate.
+**v2's advantage here (~2.3x) is bigger than on the synthetic benchmark
+above (~1.4x), not the same**, and that gap is itself worth explaining
+rather than glossing over. Checked directly: the synthetic generator's
+op stream touches only 273 distinct price levels across 500,000 ops
+(a slowly drifting mid, ±10 ticks per order); this partial-day AAPL
+sample touches 5,517, about 20x more, across its real add orders in the
+$50-$500 band. v1's `std::map` lookup is O(log P) in the number of
+distinct price levels; v2's flat-array-plus-bitmap design is O(1)
+regardless of P (that's the whole reason `OccupancyBitmap` exists, see
+"Issues found and fixed" below). More distinct price levels costs v1
+more per operation and costs v2 nothing, which is a plausible, and now
+measured, explanation for why real flow widens the gap instead of
+reproducing the synthetic benchmark's ratio.
 
-## Concurrency: a gateway thread, a matching thread, and two real lessons
+**Sanitizer coverage:** the `sanitize` preset now also builds this tool
+(`ORDERBOOK_BUILD_TOOLS` set there too), since it's new code parsing
+untrusted-length binary records with manual offset arithmetic, exactly
+the kind of code a buffer-overread bug hides in. Clean under ASan+UBSan
+replaying the full real AAPL sample, same 170,839-op result as the
+release build.
+
+## Concurrency: a gateway thread, a matching thread, and what the numbers mean
 
 Every benchmark so far calls the engine directly, in the same thread
 that generates the op. A real system doesn't: a gateway thread receives
@@ -252,21 +274,82 @@ process:**
 | pipelined, deep queue (4096) | ~8M ops/sec | ~440µs | ~700µs |
 
 Throughput drops from ~26M to ~8M ops/sec once the engine moves to its
-own thread behind a queue: cross-core cache-coherency traffic on the
-queue's `head_`/`tail_` atomics, and contention for shared cache/memory
-bandwidth between the two spinning threads, both real costs of this
-design that a single-threaded benchmark can't show. Consistent with
-this project's standing WSL2 caveat (not bare-metal), but the
-within-this-run shallow-vs-deep comparison above is the trustworthy
-part regardless of that caveat, same hardware and same virtualization
-overhead apply equally to both rows.
+own thread behind a queue. Two questions followed from that, both worth
+answering with a measurement rather than a guess, since "a saturated
+queue is slow" by itself doesn't say how much of that slowness is the
+queue versus the handoff versus something else entirely.
 
-## Bugs found and fixed
+**Lesson 3a: a saturated gateway is the wrong question if you want to
+know the true handoff cost.** Every number above comes from a gateway
+sending flat-out, which (per Lesson 2) measures queueing delay, not
+handoff cost. `measurePipeline()` gained an optional pacing mode:
+instead of sending as fast as possible, it schedules each send at a
+fixed offered rate (1M, 4M, 7M messages/sec), using an absolute
+next-send time rather than sleeping a fixed interval after each send,
+so jitter from one send doesn't compound into the next. At offered
+loads comfortably under the matching thread's real service rate, the
+queue stays close to empty, and the latency sample is close to a pure
+handoff cost:
 
-An external code review of the finished v1/v2/fuzz/benchmark project
-caught four real issues, in addition to suggesting the order
-modification feature below. Each one follows the same shape: here's what
-was wrong, here's the fix, here's the measured before/after.
+| Offered load | Achieved throughput | p50 latency |
+|---|---|---|
+| 1,000,000/sec | ~1,000,000/sec (keeps up) | ~260-280ns |
+| 4,000,000/sec | ~4,000,000/sec (keeps up) | ~260-375ns |
+| 7,000,000/sec | ~5.7-6.9M/sec (can't keep up) | ~440-640µs |
+
+At 1M and 4M offered load the gateway keeps up and p50 lands around
+260-375ns, a few times the single-threaded baseline's ~49-77ns, the
+real but modest cost of two cores actually signaling each other,
+nowhere near the hundreds of microseconds the saturated numbers show.
+At 7M, achieved throughput falls short of the target: that's the
+matching thread hitting its real ceiling in this pipelined
+configuration (consistent with the saturated throughput numbers above),
+the queue starts backing up, and p50 jumps straight back into saturated
+territory. The curve is the finding: latency stays low until offered
+load approaches the system's real capacity, then it doesn't. (p99/p99.9
+at low offered load are noisy, into the hundreds of microseconds to a
+few milliseconds on an occasional sample, consistent with this
+project's standing WSL2-virtualization caveat rather than a new issue;
+p50 is the trustworthy number here, the same reason every other
+benchmark in this project leads with p50 and reports the tail alongside
+it rather than instead of it.)
+
+**Lesson 3b: per-message cross-core traffic is a real contributor to
+the saturated throughput ceiling, confirmed by amortizing it away.**
+Every `tryPush`/`tryPop` does one atomic store the other core has to
+notice; that's the leading suspect for why saturated throughput caps
+around 6-10M ops/sec instead of the baseline's ~26M. `SpscQueue` gained
+a batch API, `tryPushBatch`/`tryPopBatch`, publishing a whole batch
+with a single store instead of one store per message (same
+best-effort, caller-loops-until-done contract as the single-item
+methods; same two-thread stress test and TSan check, now also run
+through the batch path). Re-running the deep-queue saturated case
+through the batch API (batch size 64) instead of one message at a time:
+
+| | Throughput | p50 latency |
+|---|---|---|
+| deep queue (4096), single-item | ~6.1-6.7M ops/sec | ~470-610µs |
+| deep queue (4096), batched (64) | ~8.9-9.9M ops/sec | ~330-370µs |
+
+A real, repeatable improvement (roughly 35-50% more throughput, lower
+latency at the same queue depth since the same backlog now drains
+faster), confirming per-message store frequency as *a* real cost.
+It doesn't fully close the gap back to the ~26M single-threaded
+baseline, so it's one contributor among others (shared cache/memory
+bandwidth contention between two spinning threads, and whatever
+constant overhead cross-core signaling carries under WSL2's
+virtualization, both plausible, neither separately measured here), a
+distinction worth stating plainly rather than claiming one experiment
+explained the entire gap.
+
+## Issues found and fixed
+
+Four real issues surfaced once the v1/v2/fuzz/benchmark project was
+otherwise working, three found through this project's own profiling and
+benchmark-methodology scrutiny, one (the sparse-book case, #3 below)
+caught by an external code review and reproduced here. Each follows the
+same shape: here's what was wrong, here's the fix, here's the measured
+before/after.
 
 ### 1. match() allocated a fresh vector every call
 

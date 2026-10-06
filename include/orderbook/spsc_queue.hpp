@@ -55,6 +55,51 @@ public:
         return value;
     }
 
+    // Producer side only. Writes as many of the first `count` elements
+    // of `items` as currently fit, then publishes the whole written
+    // range with a single head_ store, instead of one store per
+    // element. Returns how many were written (0 if full). The point:
+    // every head_/tail_ store is a cache line the other core has to
+    // notice, so batching the store amortizes that cross-core
+    // invalidation cost over many elements instead of paying it per
+    // message (see docs/HISTORY.md for the measured effect).
+    std::size_t tryPushBatch(const T* items, std::size_t count) {
+        std::size_t head = head_.load(std::memory_order_relaxed);
+        std::size_t available = capacity_ - (head - tailCache_);
+        if (available < count) {
+            // Cached tail is stale and might be understating real room
+            // (it can only lag behind, never run ahead); refresh before
+            // settling for a short write, not just when it looks full.
+            tailCache_ = tail_.load(std::memory_order_acquire);
+            available = capacity_ - (head - tailCache_);
+        }
+        std::size_t toWrite = count < available ? count : available;
+        for (std::size_t i = 0; i < toWrite; ++i) {
+            buffer_[(head + i) & mask_] = items[i];
+        }
+        head_.store(head + toWrite, std::memory_order_release);
+        return toWrite;
+    }
+
+    // Consumer side only, the batched counterpart of tryPushBatch.
+    // Pops up to `maxCount` elements into `out`, publishing the whole
+    // consumed range with a single tail_ store. Returns how many were
+    // popped (0 if empty).
+    std::size_t tryPopBatch(T* out, std::size_t maxCount) {
+        std::size_t tail = tail_.load(std::memory_order_relaxed);
+        std::size_t available = headCache_ - tail;
+        if (available < maxCount) {
+            headCache_ = head_.load(std::memory_order_acquire);
+            available = headCache_ - tail;
+        }
+        std::size_t toRead = maxCount < available ? maxCount : available;
+        for (std::size_t i = 0; i < toRead; ++i) {
+            out[i] = std::move(buffer_[(tail + i) & mask_]);
+        }
+        tail_.store(tail + toRead, std::memory_order_release);
+        return toRead;
+    }
+
 private:
     static std::size_t nextPowerOfTwo(std::size_t n) {
         std::size_t p = 1;

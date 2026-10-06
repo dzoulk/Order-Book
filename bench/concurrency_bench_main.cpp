@@ -18,12 +18,19 @@
 // about what the queue/thread handoff costs on top of the engine, not
 // re-litigating v1 vs v2.
 //
-// The gateway thread sends every op back to back, with no artificial
-// delay between messages: a saturated gateway, not a leisurely one, the
-// harder case for queue contention and the more realistic one for a
-// matching engine under real load.
+// This benchmark measures two different things, deliberately kept
+// separate rather than conflated into one number:
+//   - Saturated runs (shallow queue, deep queue, batched): the gateway
+//     sends flat out, no delay between messages, so these measure
+//     queueing behavior under sustained overload, not handoff cost.
+//   - Paced runs: the gateway sends at a fixed offered load well under
+//     the matching thread's service rate, so these isolate the true
+//     cross-core handoff cost, with the queue staying close to empty.
+// A single "p50 latency" number without saying which of these a
+// benchmark measured would be close to meaningless; see docs/HISTORY.md
+// for the measured numbers and why they differ so much.
 //
-// Two things turned out to matter enough to build into this benchmark
+// Three things turned out to matter enough to build into this benchmark
 // rather than just footnote (full story in docs/HISTORY.md):
 //
 // 1. Thread placement. On a hybrid P-core/E-core CPU, two logical CPUs
@@ -45,6 +52,12 @@
 //    queue to show latency scaling with depth directly, the real
 //    throughput/latency tradeoff a queue-depth config knob makes in a
 //    real gateway.
+// 3. Per-message cross-core traffic caps saturated throughput well
+//    below the single-threaded baseline. Every tryPush/tryPop does one
+//    atomic store the other core has to notice; SpscQueue's batch API
+//    (tryPushBatch/tryPopBatch) amortizes that store over many messages
+//    instead of paying it per message. The batched saturated run tests
+//    this directly against the single-item saturated runs above it.
 //
 // Configuration via environment variables:
 //   CONCURRENCY_BENCH_SEED   seed for reproduction (default: random)
@@ -219,19 +232,39 @@ struct PipelineResult {
 // noticing it, and the book actually being updated. Pins both threads
 // to the given CPUs if pinning is available (see
 // pickTwoCpusOnDistinctCores above for why this matters).
+//
+// targetRateHz, if given, paces the gateway to that offered load
+// (scheduled by an absolute next-send time, not "sleep(interval)" after
+// each send, so timing jitter in one send doesn't compound into the
+// next) instead of sending flat out. This isolates the true cross-core
+// handoff cost from the queueing delay a saturated gateway adds (see
+// the shallow/deep queue runs below for that part): at an offered load
+// comfortably under the matching thread's service rate, the queue
+// should stay almost empty, so each latency sample is close to a pure
+// handoff cost, not queueing time.
 PipelineResult measurePipeline(const std::vector<GeneratedOp>& ops, std::size_t queueCapacity,
-                                std::optional<std::pair<int, int>> cpus) {
+                                std::optional<std::pair<int, int>> cpus,
+                                std::optional<double> targetRateHz = std::nullopt) {
     SpscQueue<GatewayMessage> queue(queueCapacity);
     std::vector<std::int64_t> latenciesNs(ops.size());
 
     Clock::time_point pipelineStart = Clock::now();
 
     std::thread gateway([&] {
+        Clock::duration interval{};
+        Clock::time_point nextSend = Clock::now();
+        if (targetRateHz) interval = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / *targetRateHz));
         for (const GeneratedOp& op : ops) {
+            if (targetRateHz) {
+                while (Clock::now() < nextSend) {
+                    // not yet due, spin until the scheduled send time
+                }
+            }
             GatewayMessage msg{op, Clock::now()};
             while (!queue.tryPush(msg)) {
                 // queue full, spin
             }
+            if (targetRateHz) nextSend += interval;
         }
     });
     if (cpus) pinThreadToCpu(gateway, cpus->first);
@@ -245,6 +278,62 @@ PipelineResult measurePipeline(const std::vector<GeneratedOp>& ops, std::size_t 
             Clock::time_point now = Clock::now();
             latenciesNs[processed] =
                 std::chrono::duration_cast<std::chrono::nanoseconds>(now - msg->enqueuedAt).count();
+            ++processed;
+        }
+    }
+    gateway.join();
+
+    Clock::time_point pipelineEnd = Clock::now();
+    double throughput =
+        static_cast<double>(ops.size()) / std::chrono::duration<double>(pipelineEnd - pipelineStart).count();
+    return PipelineResult{std::move(latenciesNs), throughput};
+}
+
+// Same pipeline, but publishing through the queue's batch API
+// (SpscQueue::tryPushBatch/tryPopBatch) instead of one tryPush/tryPop
+// per message: both sides accumulate a local batch of batchSize before
+// touching the queue, so head_/tail_ get one atomic store per batch
+// instead of one per message. Only meaningful under saturation (a
+// paced gateway rarely has a full batch ready), so this is run
+// alongside the saturated shallow/deep queue measurements, not the
+// paced ones, specifically to test whether per-message cross-core
+// cache-line traffic explains the throughput drop from the
+// single-threaded baseline (see docs/HISTORY.md for the measured
+// answer).
+PipelineResult measurePipelineBatched(const std::vector<GeneratedOp>& ops, std::size_t queueCapacity,
+                                       std::size_t batchSize, std::optional<std::pair<int, int>> cpus) {
+    SpscQueue<GatewayMessage> queue(queueCapacity);
+    std::vector<std::int64_t> latenciesNs(ops.size());
+
+    Clock::time_point pipelineStart = Clock::now();
+
+    std::thread gateway([&] {
+        std::vector<GatewayMessage> batch;
+        batch.reserve(batchSize);
+        auto flush = [&] {
+            std::size_t written = 0;
+            while (written < batch.size()) written += queue.tryPushBatch(batch.data() + written, batch.size() - written);
+            batch.clear();
+        };
+        for (const GeneratedOp& op : ops) {
+            batch.push_back(GatewayMessage{op, Clock::now()});
+            if (batch.size() == batchSize) flush();
+        }
+        if (!batch.empty()) flush();
+    });
+    if (cpus) pinThreadToCpu(gateway, cpus->first);
+
+    if (cpus) pinSelfToCpu(cpus->second);
+    FastOrderBook book;
+    std::vector<GatewayMessage> batch(batchSize);
+    std::size_t processed = 0;
+    while (processed < ops.size()) {
+        std::size_t n = queue.tryPopBatch(batch.data(), batchSize);
+        for (std::size_t i = 0; i < n; ++i) {
+            apply(book, batch[i].op);
+            Clock::time_point now = Clock::now();
+            latenciesNs[processed] =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(now - batch[i].enqueuedAt).count();
             ++processed;
         }
     }
@@ -306,6 +395,22 @@ int main() {
     PipelineResult deep = measurePipeline(ops, kDeepQueue, cpus);
     printStats("pipelined, deep queue (gateway -> SPSC queue -> matching thread)", deep.latenciesNs,
                deep.throughput);
+
+    constexpr std::size_t kBatchSize = 64;
+    std::fprintf(stderr, "concurrency bench: measuring pipeline, deep queue, batched (batch size %zu)...\n",
+                 kBatchSize);
+    PipelineResult batched = measurePipelineBatched(ops, kDeepQueue, kBatchSize, cpus);
+    printStats("pipelined, deep queue, batched (same saturation, batch API)", batched.latenciesNs,
+               batched.throughput);
+
+    constexpr double kPacedRatesHz[] = {1'000'000.0, 4'000'000.0, 7'000'000.0};
+    for (double rate : kPacedRatesHz) {
+        std::fprintf(stderr, "concurrency bench: measuring pipeline, paced at %.0f msgs/sec...\n", rate);
+        PipelineResult paced = measurePipeline(ops, kDeepQueue, cpus, rate);
+        char label[128];
+        std::snprintf(label, sizeof(label), "pipelined, paced at %.0f msgs/sec offered load", rate);
+        printStats(label, paced.latenciesNs, paced.throughput);
+    }
 
     return 0;
 }

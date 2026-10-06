@@ -1,6 +1,6 @@
 # Design
 
-The system as it stands today. For how it got here, bugs found and
+The system as it stands today. For how it got here, issues found and
 fixed, and every historical measurement, see [HISTORY.md](HISTORY.md).
 
 ## Core decisions
@@ -124,17 +124,23 @@ copy of the far index, so a cache-only field touched by one thread never
 shares a line with an atomic the other thread polls. Verified race-free
 under ThreadSanitizer up to 2,000,000 messages, and correct (every
 message delivered exactly once, in order) under a real two-thread
-stress test in `tests/spsc_queue_test.cpp`.
+stress test in `tests/spsc_queue_test.cpp`. Also has a batch API
+(`tryPushBatch`/`tryPopBatch`): same best-effort, caller-loops-until-done
+contract as the single-item methods, but publishes a whole batch with
+one atomic store instead of one store per message.
 
 `bench/orderbook_concurrency_bench` puts this queue between a gateway
 thread and a matching thread owning `FastOrderBook`, measuring
 end-to-end latency instead of calling the book directly in-process. It
 picks two logical CPUs on different physical cores to pin the two
 threads to (reading `/sys/devices/system/cpu/*/topology/core_id` rather
-than assuming adjacent CPU numbers are distinct cores), and runs the
-same op stream through both a shallow and a deep queue to show how
-latency scales with queue depth under a saturated producer. See
-HISTORY.md for why both of those turned out to matter.
+than assuming adjacent CPU numbers are distinct cores), and measures
+two different things on purpose: a saturated gateway (shallow queue,
+deep queue, and a batched variant, showing how latency scales with
+queue depth and how much the batch API recovers) and a gateway paced at
+a fixed offered load well under capacity (isolating the true cross-core
+handoff cost from queueing delay). See HISTORY.md for why all of that
+turned out to matter and what the numbers came out to.
 
 ## Toolchain
 
